@@ -1,4 +1,5 @@
 use std::{
+    fmt::Debug,
     marker::PhantomData,
     mem::{align_of, size_of, ManuallyDrop},
     ops::{Deref, DerefMut},
@@ -402,6 +403,68 @@ impl<T> AVec<T> {
         }
 
         this
+    }
+}
+
+impl<T: Debug> Debug for AVec<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl<T: Debug + ?Sized> Debug for ABox<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        (&**self).fmt(f)
+    }
+}
+
+impl<T: Clone> Clone for AVec<T> {
+    fn clone(&self) -> Self {
+        let mut vec = AVec::with_capacity(self.alignment(), self.len());
+        {
+            let len = &mut vec.len;
+            let ptr: *mut T = vec.buf.ptr.as_ptr();
+
+            for (i, item) in self.iter().enumerate() {
+                unsafe { ptr.add(i).write(item.clone()) };
+                *len += 1;
+            }
+        }
+        vec
+    }
+}
+
+impl<T: PartialEq> PartialEq for AVec<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice().eq(other.as_slice())
+    }
+}
+impl<T: Eq> Eq for AVec<T> {}
+impl<T: PartialOrd> PartialOrd for AVec<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.as_slice().partial_cmp(other.as_slice())
+    }
+}
+impl<T: Ord> Ord for AVec<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_slice().cmp(other.as_slice())
+    }
+}
+
+impl<T: PartialEq + ?Sized> PartialEq for ABox<T> {
+    fn eq(&self, other: &Self) -> bool {
+        (&**self).eq(&**other)
+    }
+}
+impl<T: Eq + ?Sized> Eq for ABox<T> {}
+impl<T: PartialOrd + ?Sized> PartialOrd for ABox<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        (&**self).partial_cmp(&**other)
+    }
+}
+impl<T: Ord + ?Sized> Ord for ABox<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (&**self).cmp(&**other)
     }
 }
 
