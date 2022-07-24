@@ -7,6 +7,6 @@ description = "Aligned vector and box containers"
 readme = "README.md"
 repository = "https://github.com/sarah-ek/aligned-vec/"
 license = "MIT"
-keywords = ["vec", "allocation", "box", "array", "slice", "aligned", "alignment"]
+keywords = ["vec", "allocation", "box", "slice", "alignment"]
 
 [dependencies]
