@@ -2,7 +2,7 @@ use std::{
     marker::PhantomData,
     mem::{align_of, size_of, ManuallyDrop},
     ops::{Deref, DerefMut},
-    ptr::NonNull,
+    ptr::{null_mut, NonNull},
 };
 
 use raw::ARawVec;
@@ -89,20 +89,15 @@ impl<T> DerefMut for AVec<T> {
 impl<T> ABox<T> {
     /// Creates a new [`ABox<T>`] containing `value` at an address aligned to `align` bytes.
     #[inline]
-    pub fn new(value: T, align: usize) -> Self {
+    pub fn new(align: usize, value: T) -> Self {
+        let align = fix_alignment(align, align_of::<T>());
         let ptr = if size_of::<T>() == 0 {
-            NonNull::<T>::dangling().as_ptr()
+            null_mut::<u8>().wrapping_add(align) as *mut T
         } else {
-            unsafe {
-                raw::with_capacity_unchecked(
-                    1,
-                    fix_alignment(align, align_of::<T>()),
-                    size_of::<T>(),
-                ) as *mut T
-            }
+            unsafe { raw::with_capacity_unchecked(1, align, size_of::<T>()) as *mut T }
         };
         unsafe { ptr.write(value) };
-        unsafe { Self::from_raw_parts(ptr, align) }
+        unsafe { Self::from_raw_parts(align, ptr) }
     }
 }
 
@@ -114,7 +109,7 @@ impl<T: ?Sized> ABox<T> {
     /// The arguments to this function must be acquired from a previous call to
     /// [`Self::into_raw_parts`].
     #[inline]
-    pub unsafe fn from_raw_parts(ptr: *mut T, align: usize) -> Self {
+    pub unsafe fn from_raw_parts(align: usize, ptr: *mut T) -> Self {
         Self {
             ptr: NonNull::<T>::new_unchecked(ptr),
             align,
@@ -168,7 +163,7 @@ impl<T> AVec<T> {
     /// Panics if the capacity exceeds `isize::MAX` bytes.
     #[inline]
     #[must_use]
-    pub fn with_capacity(capacity: usize, align: usize) -> Self {
+    pub fn with_capacity(align: usize, capacity: usize) -> Self {
         unsafe {
             Self {
                 buf: ARawVec::with_capacity_unchecked(
@@ -188,14 +183,14 @@ impl<T> AVec<T> {
     /// [`Self::into_raw_parts`].
     #[inline]
     #[must_use]
-    pub unsafe fn from_raw_parts(ptr: *mut T, len: usize, capacity: usize, align: usize) -> Self {
+    pub unsafe fn from_raw_parts(ptr: *mut T, align: usize, len: usize, capacity: usize) -> Self {
         Self {
             buf: ARawVec::from_raw_parts(ptr, capacity, align),
             len,
         }
     }
 
-    /// Decomposes an [`AVec<T>`] into its raw parts: `(ptr, length, capacity, alignment)`.
+    /// Decomposes an [`AVec<T>`] into its raw parts: `(ptr, alignment, length, capacity)`.
     #[inline]
     pub fn into_raw_parts(self) -> (*mut T, usize, usize, usize) {
         let mut this = ManuallyDrop::new(self);
@@ -203,7 +198,7 @@ impl<T> AVec<T> {
         let cap = this.capacity();
         let align = this.alignment();
         let ptr = this.as_mut_ptr();
-        (ptr, len, cap, align)
+        (ptr, align, len, cap)
     }
 
     /// Returns the length of the vector.
@@ -377,19 +372,19 @@ impl<T> AVec<T> {
     pub fn into_boxed_slice(self) -> ABox<[T]> {
         let mut this = self;
         this.shrink_to_fit();
-        let (ptr, len, _, align) = this.into_raw_parts();
-        unsafe { ABox::<[T]>::from_raw_parts(std::ptr::slice_from_raw_parts_mut(ptr, len), align) }
+        let (ptr, align, len, _) = this.into_raw_parts();
+        unsafe { ABox::<[T]>::from_raw_parts(align, std::ptr::slice_from_raw_parts_mut(ptr, len)) }
     }
 
     /// Collects an iterator into an [`AVec<T>`] with the provided alignment.
     #[inline]
-    pub fn from_iter<I: IntoIterator<Item = T>>(iter: I, align: usize) -> Self {
+    pub fn from_iter<I: IntoIterator<Item = T>>(align: usize, iter: I) -> Self {
         Self::from_iter_impl(iter.into_iter(), align)
     }
 
     fn from_iter_impl<I: Iterator<Item = T>>(mut iter: I, align: usize) -> Self {
         let lower_bound = iter.size_hint().0;
-        let mut this = Self::with_capacity(lower_bound, align);
+        let mut this = Self::with_capacity(align, lower_bound);
 
         {
             let len = &mut this.len;
@@ -430,9 +425,9 @@ mod tests {
 
     #[test]
     fn collect() {
-        let v = AVec::from_iter(0..4, 64);
+        let v = AVec::from_iter(64, 0..4);
         assert_eq!(&*v, &[0, 1, 2, 3]);
-        let v = AVec::from_iter(repeat(()).take(4), 64);
+        let v = AVec::from_iter(64, repeat(()).take(4));
         assert_eq!(&*v, &[(), (), (), ()]);
     }
 
@@ -445,14 +440,14 @@ mod tests {
         v.push(3);
         assert_eq!(&*v, &[0, 1, 2, 3]);
 
-        let mut v = AVec::from_iter(0..4, 64);
+        let mut v = AVec::from_iter(64, 0..4);
         v.push(4);
         v.push(5);
         v.push(6);
         v.push(7);
         assert_eq!(&*v, &[0, 1, 2, 3, 4, 5, 6, 7]);
 
-        let mut v = AVec::from_iter(repeat(()).take(4), 64);
+        let mut v = AVec::from_iter(64, repeat(()).take(4));
         v.push(());
         v.push(());
         v.push(());
@@ -493,7 +488,7 @@ mod tests {
 
     #[test]
     fn shrink() {
-        let mut v = AVec::<i32>::with_capacity(10, 16);
+        let mut v = AVec::<i32>::with_capacity(16, 10);
         v.push(0);
         v.push(1);
         v.push(2);
@@ -503,7 +498,7 @@ mod tests {
         assert_eq!(v.len(), 3);
         assert_eq!(v.capacity(), 3);
 
-        let mut v = AVec::<i32>::with_capacity(10, 16);
+        let mut v = AVec::<i32>::with_capacity(16, 10);
         v.push(0);
         v.push(1);
         v.push(2);
@@ -556,7 +551,7 @@ mod tests {
 
     #[test]
     fn box_new() {
-        let boxed = ABox::new(3, 64);
+        let boxed = ABox::new(64, 3);
         assert_eq!(&*boxed, &3);
     }
 }
