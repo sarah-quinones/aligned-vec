@@ -553,4 +553,10 @@ mod tests {
         let boxed = v.into_boxed_slice();
         assert_eq!(&*boxed, &[0, 1, 2]);
     }
+
+    #[test]
+    fn box_new() {
+        let boxed = ABox::new(3, 64);
+        assert_eq!(&*boxed, &3);
+    }
 }
