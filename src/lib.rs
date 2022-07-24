@@ -467,6 +467,10 @@ impl<T: Ord + ?Sized> Ord for ABox<T> {
         (&**self).cmp(&**other)
     }
 }
+unsafe impl<T: Sync> Sync for AVec<T> {}
+unsafe impl<T: Send> Send for AVec<T> {}
+unsafe impl<T: Sync> Sync for ABox<T> {}
+unsafe impl<T: Send> Send for ABox<T> {}
 
 #[cfg(test)]
 mod tests {
