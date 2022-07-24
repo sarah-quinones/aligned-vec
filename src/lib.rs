@@ -201,7 +201,7 @@ impl<T> AVec<T> {
         let mut this = ManuallyDrop::new(self);
         let len = this.len();
         let cap = this.capacity();
-        let align = this.align();
+        let align = this.alignment();
         let ptr = this.as_mut_ptr();
         (ptr, len, cap, align)
     }
@@ -258,7 +258,7 @@ impl<T> AVec<T> {
     /// Returns the alignment of the vector.
     #[inline]
     #[must_use]
-    pub fn align(&self) -> usize {
+    pub fn alignment(&self) -> usize {
         self.buf.align()
     }
 
@@ -421,11 +421,11 @@ mod tests {
         let v = AVec::<i32>::new(15);
         assert_eq!(v.len(), 0);
         assert_eq!(v.capacity(), 0);
-        assert_eq!(v.align(), 16);
+        assert_eq!(v.alignment(), 16);
         let v = AVec::<()>::new(15);
         assert_eq!(v.len(), 0);
         assert_eq!(v.capacity(), usize::MAX);
-        assert_eq!(v.align(), 16);
+        assert_eq!(v.alignment(), 16);
     }
 
     #[test]
