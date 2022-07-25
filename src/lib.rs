@@ -100,6 +100,12 @@ impl<T> ABox<T> {
         unsafe { ptr.write(value) };
         unsafe { Self::from_raw_parts(align, ptr) }
     }
+
+    /// Returns the alignment of the box.
+    #[inline]
+    pub fn alignment(&self) -> usize {
+        self.align
+    }
 }
 
 impl<T: ?Sized> ABox<T> {
@@ -383,6 +389,26 @@ impl<T> AVec<T> {
         Self::from_iter_impl(iter.into_iter(), align)
     }
 
+    /// Collects a slice into an [`AVec<T>`] with the provided alignment.
+    #[inline]
+    pub fn from_slice(align: usize, slice: &[T]) -> Self
+    where
+        T: Clone,
+    {
+        let len = slice.len();
+        let mut vec = AVec::with_capacity(align, len);
+        {
+            let len = &mut vec.len;
+            let ptr: *mut T = vec.buf.ptr.as_ptr();
+
+            for (i, item) in slice.iter().enumerate() {
+                unsafe { ptr.add(i).write(item.clone()) };
+                *len += 1;
+            }
+        }
+        vec
+    }
+
     fn from_iter_impl<I: Iterator<Item = T>>(mut iter: I, align: usize) -> Self {
         let lower_bound = iter.size_hint().0;
         let mut this = Self::with_capacity(align, lower_bound);
@@ -420,17 +446,19 @@ impl<T: Debug + ?Sized> Debug for ABox<T> {
 
 impl<T: Clone> Clone for AVec<T> {
     fn clone(&self) -> Self {
-        let mut vec = AVec::with_capacity(self.alignment(), self.len());
-        {
-            let len = &mut vec.len;
-            let ptr: *mut T = vec.buf.ptr.as_ptr();
+        Self::from_slice(self.alignment(), self.deref())
+    }
+}
 
-            for (i, item) in self.iter().enumerate() {
-                unsafe { ptr.add(i).write(item.clone()) };
-                *len += 1;
-            }
-        }
-        vec
+impl<T: Clone> Clone for ABox<T> {
+    fn clone(&self) -> Self {
+        ABox::new(self.align, self.deref().clone())
+    }
+}
+
+impl<T: Clone> Clone for ABox<[T]> {
+    fn clone(&self) -> Self {
+        AVec::from_slice(self.align, self.deref()).into_boxed_slice()
     }
 }
 
@@ -620,5 +648,17 @@ mod tests {
     fn box_new() {
         let boxed = ABox::new(64, 3);
         assert_eq!(&*boxed, &3);
+    }
+
+    #[test]
+    fn box_clone() {
+        let boxed = ABox::new(64, 3);
+        assert_eq!(boxed, boxed.clone());
+    }
+
+    #[test]
+    fn box_slice_clone() {
+        let boxed = AVec::from_iter(64, 0..123).into_boxed_slice();
+        assert_eq!(boxed, boxed.clone());
     }
 }
