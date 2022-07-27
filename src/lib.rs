@@ -10,20 +10,117 @@ use raw::ARawVec;
 
 mod raw;
 
+// https://rust-lang.github.io/hashbrown/src/crossbeam_utils/cache_padded.rs.html#128-130
+pub const CACHELINE_ALIGN: usize = {
+    #[cfg(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "powerpc64",
+    ))]
+    {
+        128
+    }
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "mips",
+        target_arch = "mips64",
+        target_arch = "riscv64",
+    ))]
+    {
+        32
+    }
+    #[cfg(target_arch = "s390x")]
+    {
+        256
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "powerpc64",
+        target_arch = "arm",
+        target_arch = "mips",
+        target_arch = "mips64",
+        target_arch = "riscv64",
+        target_arch = "s390x",
+    )))]
+    {
+        64
+    }
+};
+
+mod private {
+    pub trait Seal {}
+}
+
+/// Trait for types that wrap an alignment value.
+pub trait Alignment: Copy + private::Seal {
+    /// Takes an alignment value and a minimum valid alignment,
+    /// and returns an alignment wrapper that contains a power of two alignment that is greater
+    /// than `minimum_align`, and if possible, greater than `align`.
+    #[must_use]
+    fn new(align: usize, minimum_align: usize) -> Self;
+    /// Takes a minimum valid alignment,
+    /// and returns an alignment wrapper that contains a power of two alignment that is greater
+    /// than `minimum_align`, and if possible, greater than the contained value.
+    #[must_use]
+    fn alignment(self, minimum_align: usize) -> usize;
+}
+
+/// Type wrapping a runtime alignment value.
+#[derive(Copy, Clone)]
+pub struct RuntimeAlign {
+    align: usize,
+}
+
+/// Type wrapping a compile-time alignment value.
+#[derive(Copy, Clone)]
+pub struct ConstAlign<const ALIGN: usize>;
+
+impl private::Seal for RuntimeAlign {}
+impl<const ALIGN: usize> private::Seal for ConstAlign<ALIGN> {}
+
+impl Alignment for RuntimeAlign {
+    #[inline]
+    fn new(align: usize, minimum_align: usize) -> Self {
+        RuntimeAlign {
+            align: fix_alignment(align, minimum_align),
+        }
+    }
+
+    #[inline]
+    fn alignment(self, minimum_align: usize) -> usize {
+        let _ = minimum_align;
+        self.align
+    }
+}
+impl<const ALIGN: usize> Alignment for ConstAlign<ALIGN> {
+    #[inline]
+    fn new(align: usize, minimum_align: usize) -> Self {
+        let _ = align;
+        let _ = minimum_align;
+        ConstAlign::<ALIGN>
+    }
+
+    #[inline]
+    fn alignment(self, minimum_align: usize) -> usize {
+        fix_alignment(ALIGN, minimum_align)
+    }
+}
+
 /// Aligned vector. See [`Vec`] for more info.
-pub struct AVec<T> {
-    buf: ARawVec<T>,
+pub struct AVec<T, A: Alignment = ConstAlign<CACHELINE_ALIGN>> {
+    buf: ARawVec<T, A>,
     len: usize,
 }
 
 /// Aligned box. See [`Box`] for more info.
-pub struct ABox<T: ?Sized> {
+pub struct ABox<T: ?Sized, A: Alignment = ConstAlign<CACHELINE_ALIGN>> {
     ptr: NonNull<T>,
-    align: usize,
+    align: A,
     _marker: PhantomData<T>,
 }
 
-impl<T: ?Sized> Deref for ABox<T> {
+impl<T: ?Sized, A: Alignment> Deref for ABox<T, A> {
     type Target = T;
 
     #[inline]
@@ -32,7 +129,7 @@ impl<T: ?Sized> Deref for ABox<T> {
     }
 }
 
-impl<T: ?Sized> DerefMut for ABox<T> {
+impl<T: ?Sized, A: Alignment> DerefMut for ABox<T, A> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut *self.ptr.as_ptr() }
@@ -58,21 +155,22 @@ impl Drop for AllocDrop {
     }
 }
 
-impl<T: ?Sized> Drop for ABox<T> {
+impl<T: ?Sized, A: Alignment> Drop for ABox<T, A> {
     #[inline]
     fn drop(&mut self) {
         let size_bytes = core::mem::size_of_val(self.deref_mut());
+        let align_bytes = core::mem::align_of_val(self.deref_mut());
         let ptr = self.deref_mut() as *mut T;
         let _alloc_drop = AllocDrop {
             ptr: ptr as *mut u8,
             size_bytes,
-            align: self.align,
+            align: self.align.alignment(align_bytes),
         };
         unsafe { ptr.drop_in_place() };
     }
 }
 
-impl<T> Deref for AVec<T> {
+impl<T, A: Alignment> Deref for AVec<T, A> {
     type Target = [T];
 
     #[inline]
@@ -80,18 +178,18 @@ impl<T> Deref for AVec<T> {
         self.as_slice()
     }
 }
-impl<T> DerefMut for AVec<T> {
+impl<T, A: Alignment> DerefMut for AVec<T, A> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_mut_slice()
     }
 }
 
-impl<T> ABox<T> {
+impl<T, A: Alignment> ABox<T, A> {
     /// Creates a new [`ABox<T>`] containing `value` at an address aligned to `align` bytes.
     #[inline]
     pub fn new(align: usize, value: T) -> Self {
-        let align = fix_alignment(align, align_of::<T>());
+        let align = A::new(align, align_of::<T>()).alignment(align_of::<T>());
         let ptr = if size_of::<T>() == 0 {
             null_mut::<u8>().wrapping_add(align) as *mut T
         } else {
@@ -104,11 +202,11 @@ impl<T> ABox<T> {
     /// Returns the alignment of the box.
     #[inline]
     pub fn alignment(&self) -> usize {
-        self.align
+        self.align.alignment(align_of::<T>())
     }
 }
 
-impl<T: ?Sized> ABox<T> {
+impl<T: ?Sized, A: Alignment> ABox<T, A> {
     /// Creates a new [`ABox<T>`] from its raw parts.
     ///
     /// # Safety
@@ -119,7 +217,7 @@ impl<T: ?Sized> ABox<T> {
     pub unsafe fn from_raw_parts(align: usize, ptr: *mut T) -> Self {
         Self {
             ptr: NonNull::<T>::new_unchecked(ptr),
-            align,
+            align: A::new(align, core::mem::align_of_val(&*ptr)),
             _marker: PhantomData,
         }
     }
@@ -128,11 +226,12 @@ impl<T: ?Sized> ABox<T> {
     #[inline]
     pub fn into_raw_parts(self) -> (*mut T, usize) {
         let this = ManuallyDrop::new(self);
-        (this.ptr.as_ptr(), this.align)
+        let align = core::mem::align_of_val(unsafe { &*this.ptr.as_ptr() });
+        (this.ptr.as_ptr(), this.align.alignment(align))
     }
 }
 
-impl<T> Drop for AVec<T> {
+impl<T, A: Alignment> Drop for AVec<T, A> {
     #[inline]
     fn drop(&mut self) {
         // SAFETY: dropping initialized elements
@@ -142,21 +241,22 @@ impl<T> Drop for AVec<T> {
 
 #[inline]
 fn fix_alignment(align: usize, base_align: usize) -> usize {
-    match align.checked_next_power_of_two() {
-        Some(val) => val,
-        None => 0,
-    }
-    .max(base_align)
+    align
+        .checked_next_power_of_two()
+        .unwrap_or(0)
+        .max(base_align)
 }
 
-impl<T> AVec<T> {
+impl<T, A: Alignment> AVec<T, A> {
     /// Returns a new [`AVec<T>`] with the provided alignment.
     #[inline]
     #[must_use]
     pub fn new(align: usize) -> Self {
         unsafe {
             Self {
-                buf: ARawVec::new_unchecked(fix_alignment(align, align_of::<T>())),
+                buf: ARawVec::new_unchecked(
+                    A::new(align, align_of::<T>()).alignment(align_of::<T>()),
+                ),
                 len: 0,
             }
         }
@@ -175,7 +275,7 @@ impl<T> AVec<T> {
             Self {
                 buf: ARawVec::with_capacity_unchecked(
                     capacity,
-                    fix_alignment(align, align_of::<T>()),
+                    A::new(align, align_of::<T>()).alignment(align_of::<T>()),
                 ),
                 len: 0,
             }
@@ -376,11 +476,13 @@ impl<T> AVec<T> {
     /// Converts the vector into [`ABox<T>`].  
     /// This will drop any excess capacity.
     #[inline]
-    pub fn into_boxed_slice(self) -> ABox<[T]> {
+    pub fn into_boxed_slice(self) -> ABox<[T], A> {
         let mut this = self;
         this.shrink_to_fit();
         let (ptr, align, len, _) = this.into_raw_parts();
-        unsafe { ABox::<[T]>::from_raw_parts(align, std::ptr::slice_from_raw_parts_mut(ptr, len)) }
+        unsafe {
+            ABox::<[T], A>::from_raw_parts(align, std::ptr::slice_from_raw_parts_mut(ptr, len))
+        }
     }
 
     /// Collects an iterator into an [`AVec<T>`] with the provided alignment.
@@ -432,73 +534,73 @@ impl<T> AVec<T> {
     }
 }
 
-impl<T: Debug> Debug for AVec<T> {
+impl<T: Debug, A: Alignment> Debug for AVec<T, A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_list().entries(self.iter()).finish()
     }
 }
 
-impl<T: Debug + ?Sized> Debug for ABox<T> {
+impl<T: Debug + ?Sized, A: Alignment> Debug for ABox<T, A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         (&**self).fmt(f)
     }
 }
 
-impl<T: Clone> Clone for AVec<T> {
+impl<T: Clone, A: Alignment> Clone for AVec<T, A> {
     fn clone(&self) -> Self {
         Self::from_slice(self.alignment(), self.deref())
     }
 }
 
-impl<T: Clone> Clone for ABox<T> {
+impl<T: Clone, A: Alignment> Clone for ABox<T, A> {
     fn clone(&self) -> Self {
-        ABox::new(self.align, self.deref().clone())
+        ABox::new(self.align.alignment(align_of::<T>()), self.deref().clone())
     }
 }
 
-impl<T: Clone> Clone for ABox<[T]> {
+impl<T: Clone, A: Alignment> Clone for ABox<[T], A> {
     fn clone(&self) -> Self {
-        AVec::from_slice(self.align, self.deref()).into_boxed_slice()
+        AVec::from_slice(self.align.alignment(align_of::<T>()), self.deref()).into_boxed_slice()
     }
 }
 
-impl<T: PartialEq> PartialEq for AVec<T> {
+impl<T: PartialEq, A: Alignment> PartialEq for AVec<T, A> {
     fn eq(&self, other: &Self) -> bool {
         self.as_slice().eq(other.as_slice())
     }
 }
-impl<T: Eq> Eq for AVec<T> {}
-impl<T: PartialOrd> PartialOrd for AVec<T> {
+impl<T: Eq, A: Alignment> Eq for AVec<T, A> {}
+impl<T: PartialOrd, A: Alignment> PartialOrd for AVec<T, A> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.as_slice().partial_cmp(other.as_slice())
     }
 }
-impl<T: Ord> Ord for AVec<T> {
+impl<T: Ord, A: Alignment> Ord for AVec<T, A> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.as_slice().cmp(other.as_slice())
     }
 }
 
-impl<T: PartialEq + ?Sized> PartialEq for ABox<T> {
+impl<T: PartialEq + ?Sized, A: Alignment> PartialEq for ABox<T, A> {
     fn eq(&self, other: &Self) -> bool {
         (&**self).eq(&**other)
     }
 }
-impl<T: Eq + ?Sized> Eq for ABox<T> {}
-impl<T: PartialOrd + ?Sized> PartialOrd for ABox<T> {
+impl<T: Eq + ?Sized, A: Alignment> Eq for ABox<T, A> {}
+impl<T: PartialOrd + ?Sized, A: Alignment> PartialOrd for ABox<T, A> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         (&**self).partial_cmp(&**other)
     }
 }
-impl<T: Ord + ?Sized> Ord for ABox<T> {
+impl<T: Ord + ?Sized, A: Alignment> Ord for ABox<T, A> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         (&**self).cmp(&**other)
     }
 }
-unsafe impl<T: Sync> Sync for AVec<T> {}
-unsafe impl<T: Send> Send for AVec<T> {}
-unsafe impl<T: Sync> Sync for ABox<T> {}
-unsafe impl<T: Send> Send for ABox<T> {}
+unsafe impl<T: Sync, A: Alignment + Sync> Sync for AVec<T, A> {}
+unsafe impl<T: Send, A: Alignment + Send> Send for AVec<T, A> {}
+unsafe impl<T: Sync, A: Alignment + Sync> Sync for ABox<T, A> {}
+unsafe impl<T: Send, A: Alignment + Send> Send for ABox<T, A> {}
 
 #[cfg(test)]
 mod tests {
@@ -511,18 +613,29 @@ mod tests {
         let v = AVec::<i32>::new(15);
         assert_eq!(v.len(), 0);
         assert_eq!(v.capacity(), 0);
-        assert_eq!(v.alignment(), 16);
+        assert_eq!(v.alignment(), CACHELINE_ALIGN);
+        assert_eq!(v.as_ptr().align_offset(CACHELINE_ALIGN), 0);
         let v = AVec::<()>::new(15);
         assert_eq!(v.len(), 0);
         assert_eq!(v.capacity(), usize::MAX);
-        assert_eq!(v.alignment(), 16);
+        assert_eq!(v.alignment(), CACHELINE_ALIGN);
+        assert_eq!(v.as_ptr().align_offset(CACHELINE_ALIGN), 0);
+
+        #[repr(align(4096))]
+        struct OverAligned;
+        let v = AVec::<OverAligned>::new(15);
+        assert_eq!(v.len(), 0);
+        assert_eq!(v.capacity(), usize::MAX);
+        assert_eq!(v.alignment(), 4096);
+        assert_eq!(v.as_ptr().align_offset(CACHELINE_ALIGN), 0);
+        assert_eq!(v.as_ptr().align_offset(4096), 0);
     }
 
     #[test]
     fn collect() {
-        let v = AVec::from_iter(64, 0..4);
+        let v = AVec::<_>::from_iter(64, 0..4);
         assert_eq!(&*v, &[0, 1, 2, 3]);
-        let v = AVec::from_iter(64, repeat(()).take(4));
+        let v = AVec::<_>::from_iter(64, repeat(()).take(4));
         assert_eq!(&*v, &[(), (), (), ()]);
     }
 
@@ -535,14 +648,14 @@ mod tests {
         v.push(3);
         assert_eq!(&*v, &[0, 1, 2, 3]);
 
-        let mut v = AVec::from_iter(64, 0..4);
+        let mut v = AVec::<_>::from_iter(64, 0..4);
         v.push(4);
         v.push(5);
         v.push(6);
         v.push(7);
         assert_eq!(&*v, &[0, 1, 2, 3, 4, 5, 6, 7]);
 
-        let mut v = AVec::from_iter(64, repeat(()).take(4));
+        let mut v = AVec::<_>::from_iter(64, repeat(()).take(4));
         v.push(());
         v.push(());
         v.push(());
@@ -646,19 +759,19 @@ mod tests {
 
     #[test]
     fn box_new() {
-        let boxed = ABox::new(64, 3);
+        let boxed = ABox::<_>::new(64, 3);
         assert_eq!(&*boxed, &3);
     }
 
     #[test]
     fn box_clone() {
-        let boxed = ABox::new(64, 3);
+        let boxed = ABox::<_>::new(64, 3);
         assert_eq!(boxed, boxed.clone());
     }
 
     #[test]
     fn box_slice_clone() {
-        let boxed = AVec::from_iter(64, 0..123).into_boxed_slice();
+        let boxed = AVec::<_>::from_iter(64, 0..123).into_boxed_slice();
         assert_eq!(boxed, boxed.clone());
     }
 }

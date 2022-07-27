@@ -1,18 +1,19 @@
+use crate::Alignment;
 use std::{
     alloc::{alloc, dealloc, handle_alloc_error, realloc, Layout},
     marker::PhantomData,
-    mem::size_of,
+    mem::{align_of, size_of},
     ptr::{null_mut, NonNull},
 };
 
-pub struct ARawVec<T> {
+pub struct ARawVec<T, A: Alignment> {
     pub ptr: NonNull<T>,
     pub capacity: usize,
-    pub align: usize,
+    pub align: A,
     _marker: PhantomData<T>,
 }
 
-impl<T> Drop for ARawVec<T> {
+impl<T, A: Alignment> Drop for ARawVec<T, A> {
     #[inline]
     fn drop(&mut self) {
         // this can't overflow since we already have this much stored in a slice
@@ -22,7 +23,10 @@ impl<T> Drop for ARawVec<T> {
             unsafe {
                 dealloc(
                     self.ptr.as_ptr() as *mut u8,
-                    Layout::from_size_align_unchecked(size_bytes, self.align),
+                    Layout::from_size_align_unchecked(
+                        size_bytes,
+                        self.align.alignment(align_of::<T>()),
+                    ),
                 )
             }
         }
@@ -33,7 +37,7 @@ pub fn capacity_overflow() -> ! {
     panic!("capacity overflow")
 }
 
-impl<T> ARawVec<T> {
+impl<T, A: Alignment> ARawVec<T, A> {
     /// # Safety
     ///
     /// `align` must be a power of two.  
@@ -60,7 +64,7 @@ impl<T> ARawVec<T> {
                     size_of::<T>(),
                 ) as *mut T),
                 capacity,
-                align,
+                align: A::new(align, align_of::<T>()),
                 _marker: PhantomData,
             }
         }
@@ -77,8 +81,10 @@ impl<T> ARawVec<T> {
     pub unsafe fn grow_amortized(&mut self, len: usize, additional: usize) {
         debug_assert!(additional > 0);
         if self.capacity == 0 {
-            *self =
-                Self::with_capacity_unchecked(additional.max(Self::MIN_NON_ZERO_CAP), self.align);
+            *self = Self::with_capacity_unchecked(
+                additional.max(Self::MIN_NON_ZERO_CAP),
+                self.align.alignment(align_of::<T>()),
+            );
             return;
         }
 
@@ -101,7 +107,7 @@ impl<T> ARawVec<T> {
                 self.as_mut_ptr() as *mut u8,
                 self.capacity,
                 new_cap,
-                self.align,
+                self.align.alignment(align_of::<T>()),
                 size_of::<T>(),
             ) as *mut T
         };
@@ -118,7 +124,8 @@ impl<T> ARawVec<T> {
         }
 
         if self.capacity == 0 {
-            *self = Self::with_capacity_unchecked(additional, self.align);
+            *self =
+                Self::with_capacity_unchecked(additional, self.align.alignment(align_of::<T>()));
             return;
         }
 
@@ -131,7 +138,7 @@ impl<T> ARawVec<T> {
             self.as_mut_ptr() as *mut u8,
             self.capacity,
             new_cap,
-            self.align,
+            self.align.alignment(align_of::<T>()),
             size_of::<T>(),
         ) as *mut T;
 
@@ -154,7 +161,8 @@ impl<T> ARawVec<T> {
         // for cap
         let new_size_bytes = len * size_of;
         let old_size_bytes = old_capacity * size_of;
-        let old_layout = Layout::from_size_align_unchecked(old_size_bytes, align);
+        let old_layout =
+            Layout::from_size_align_unchecked(old_size_bytes, align.alignment(align_of::<T>()));
 
         let ptr = realloc(old_ptr, old_layout, new_size_bytes);
         let ptr = ptr as *mut T;
@@ -167,7 +175,7 @@ impl<T> ARawVec<T> {
         Self {
             ptr: NonNull::<T>::new_unchecked(ptr),
             capacity,
-            align,
+            align: A::new(align, align_of::<T>()),
             _marker: PhantomData,
         }
     }
@@ -180,7 +188,7 @@ impl<T> ARawVec<T> {
 
     #[inline]
     pub fn align(&self) -> usize {
-        self.align
+        self.align.alignment(align_of::<T>())
     }
 
     #[inline]
