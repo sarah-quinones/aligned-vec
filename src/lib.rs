@@ -230,8 +230,8 @@ impl<T> AVec<T> {
     }
 
     /// Reserves enough capacity for at least `additional` more elements to be inserted in the
-    /// vector. After this call to `reserve`, capacity will be greater than or equal to `self.len()
-    /// + additional`. Does nothing if the capacity is already sufficient.
+    /// vector. After this call to `reserve`, capacity will be greater than or equal to `self.len() + additional`.
+    /// Does nothing if the capacity is already sufficient.
     ///
     /// # Panics
     ///
@@ -244,8 +244,8 @@ impl<T> AVec<T> {
     }
 
     /// Reserves enough capacity for exactly `additional` more elements to be inserted in the
-    /// vector. After this call to `reserve`, capacity will be greater than or equal to `self.len()
-    /// + additional`. Does nothing if the capacity is already sufficient.
+    /// vector. After this call to `reserve`, capacity will be greater than or equal to `self.len() + additional`.
+    /// Does nothing if the capacity is already sufficient.
     ///
     /// # Panics
     ///
