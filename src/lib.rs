@@ -599,8 +599,8 @@ impl<T: Ord + ?Sized, A: Alignment> Ord for ABox<T, A> {
 }
 unsafe impl<T: Sync, A: Alignment + Sync> Sync for AVec<T, A> {}
 unsafe impl<T: Send, A: Alignment + Send> Send for AVec<T, A> {}
-unsafe impl<T: Sync, A: Alignment + Sync> Sync for ABox<T, A> {}
-unsafe impl<T: Send, A: Alignment + Send> Send for ABox<T, A> {}
+unsafe impl<T: ?Sized + Sync, A: Alignment + Sync> Sync for ABox<T, A> {}
+unsafe impl<T: ?Sized + Send, A: Alignment + Send> Send for ABox<T, A> {}
 
 #[cfg(test)]
 mod tests {
