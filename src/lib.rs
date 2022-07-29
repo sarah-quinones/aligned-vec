@@ -512,25 +512,53 @@ impl<T, A: Alignment> AVec<T, A> {
     }
 
     fn from_iter_impl<I: Iterator<Item = T>>(mut iter: I, align: usize) -> Self {
-        let lower_bound = iter.size_hint().0;
+        let (lower_bound, upper_bound) = iter.size_hint();
         let mut this = Self::with_capacity(align, lower_bound);
 
-        {
+        if upper_bound == Some(lower_bound) {
+            let len = &mut this.len;
+            let ptr = this.buf.ptr.as_ptr();
+
+            let first_chunk = iter.take(lower_bound);
+            first_chunk.enumerate().for_each(|(i, item)| {
+                unsafe { ptr.add(i).write(item) };
+                *len += 1;
+            });
+        } else {
             let len = &mut this.len;
             let ptr = this.buf.ptr.as_ptr();
 
             let first_chunk = (&mut iter).take(lower_bound);
-            for (i, item) in first_chunk.enumerate() {
+            first_chunk.enumerate().for_each(|(i, item)| {
                 unsafe { ptr.add(i).write(item) };
                 *len += 1;
-            }
-        }
-
-        for item in iter {
-            this.push(item);
+            });
+            iter.for_each(|item| {
+                this.push(item);
+            });
         }
 
         this
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn __from_elem(align: usize, elem: T, count: usize) -> Self
+    where
+        T: Clone,
+    {
+        Self::from_iter(align, std::iter::repeat(elem).take(count))
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    /// this is unsafe do not call this in user code
+    pub fn __copy_from_ptr(align: usize, src: *const T, len: usize) -> Self {
+        let mut v = Self::with_capacity(align, len);
+        let dst = v.as_mut_ptr();
+        unsafe { std::ptr::copy_nonoverlapping(src, dst, len) };
+        v.len = len;
+        v
     }
 }
 
@@ -601,6 +629,46 @@ unsafe impl<T: Sync, A: Alignment + Sync> Sync for AVec<T, A> {}
 unsafe impl<T: Send, A: Alignment + Send> Send for AVec<T, A> {}
 unsafe impl<T: ?Sized + Sync, A: Alignment + Sync> Sync for ABox<T, A> {}
 unsafe impl<T: ?Sized + Send, A: Alignment + Send> Send for ABox<T, A> {}
+
+/// Create a vector that is aligned to a cache line boundary.
+#[macro_export]
+macro_rules! avec {
+    () => {
+        $crate::AVec::<_>::new(0)
+    };
+    ($elem: expr; $count: expr) => {
+        $crate::AVec::<_>::__from_elem(0, $elem, $count)
+    };
+    ($($elem: expr),*) => {
+        {
+            let __data = ::core::mem::ManuallyDrop::new([$($elem,)*]);
+            let __len = __data.len();
+            let __ptr = __data.as_ptr();
+            let mut __aligned_vec = $crate::AVec::<_>::__copy_from_ptr(0, __ptr, __len);
+            __aligned_vec
+        }
+    };
+}
+
+/// Create a vector that is aligned to a runtime alignment value.
+#[macro_export]
+macro_rules! avec_rt {
+    ([$align: expr]$(|)?) => {
+        $crate::AVec::<_, $crate::RuntimeAlign>::new($align)
+    };
+    ([$align: expr]| $elem: expr; $count: expr) => {
+        $crate::AVec::<_, $crate::RuntimeAlign>::__from_elem($align, $elem, $count)
+    };
+    ([$align: expr]| $($elem: expr),*) => {
+        {
+            let __data = ::core::mem::ManuallyDrop::new([$($elem,)*]);
+            let __len = __data.len();
+            let __ptr = __data.as_ptr();
+            let mut __aligned_vec = $crate::AVec::<_>::__copy_from_ptr($align, __ptr, __len);
+            __aligned_vec
+        }
+    };
+}
 
 #[cfg(test)]
 mod tests {
@@ -773,5 +841,47 @@ mod tests {
     fn box_slice_clone() {
         let boxed = AVec::<_>::from_iter(64, 0..123).into_boxed_slice();
         assert_eq!(boxed, boxed.clone());
+    }
+
+    #[test]
+    fn macros() {
+        let u: AVec<()> = avec![];
+        assert_eq!(u.len(), 0);
+        assert_eq!(u.as_ptr().align_offset(CACHELINE_ALIGN), 0);
+
+        let v = avec![0; 4];
+        assert_eq!(v.len(), 4);
+        assert_eq!(v.as_ptr().align_offset(CACHELINE_ALIGN), 0);
+
+        let mut w = avec![vec![0, 1], vec![3, 4], vec![5, 6], vec![7, 8]];
+        w[0].push(2);
+        w[3].pop();
+        assert_eq!(w.len(), 4);
+        assert_eq!(w.as_ptr().align_offset(CACHELINE_ALIGN), 0);
+        assert_eq!(w[0], vec![0, 1, 2]);
+        assert_eq!(w[1], vec![3, 4]);
+        assert_eq!(w[2], vec![5, 6]);
+        assert_eq!(w[3], vec![7]);
+    }
+
+    #[test]
+    fn macros_rt() {
+        let u: AVec<(), _> = avec_rt![[32]];
+        assert_eq!(u.len(), 0);
+        assert_eq!(u.as_ptr().align_offset(32), 0);
+
+        let v = avec_rt![[32]| 0; 4];
+        assert_eq!(v.len(), 4);
+        assert_eq!(v.as_ptr().align_offset(32), 0);
+
+        let mut w = avec_rt![[64] | vec![0, 1], vec![3, 4], vec![5, 6], vec![7, 8]];
+        w[0].push(2);
+        w[3].pop();
+        assert_eq!(w.len(), 4);
+        assert_eq!(w.as_ptr().align_offset(64), 0);
+        assert_eq!(w[0], vec![0, 1, 2]);
+        assert_eq!(w[1], vec![3, 4]);
+        assert_eq!(w[2], vec![5, 6]);
+        assert_eq!(w[3], vec![7]);
     }
 }
