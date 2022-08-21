@@ -10,3 +10,13 @@ license = "MIT"
 keywords = ["vec", "allocation", "box", "slice", "alignment"]
 
 [dependencies]
+serde = { version = "1.0", optional = true, default-features = false }
+
+[features]
+default = ["std"]
+std = []
+serde = ["dep:serde"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

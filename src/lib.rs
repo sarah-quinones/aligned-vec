@@ -1,14 +1,30 @@
-use std::{
+#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
+//! # aligned-vec
+//!
+//! This crate provides the `AVec<T>` and `ABox<T>` types, which are intended to have a similar API
+//! to `Vec<T>` and `Box<T>`, but align the data they contain to a runtime alignment value.
+//!
+//! This is useful for situations where the alignment of the data matters, such as when working with
+//! numerical data that can get performance benefits from being aligned to a SIMD-compatible memory address.
+//!
+//! # Features
+//!
+//! - `std` (default feature): Links this crate to the `std-crate` instead of the `core-crate`.
+//! - `serde`: Implements serialization and deserialization features for `ABox` and `AVec`.
+
+use core::{
     fmt::Debug,
     marker::PhantomData,
     mem::{align_of, size_of, ManuallyDrop},
     ops::{Deref, DerefMut},
     ptr::{null_mut, NonNull},
 };
-
 use raw::ARawVec;
 
 mod raw;
+extern crate alloc;
 
 // https://rust-lang.github.io/hashbrown/src/crossbeam_utils/cache_padded.rs.html#128-130
 pub const CACHELINE_ALIGN: usize = {
@@ -136,6 +152,20 @@ impl<T: ?Sized, A: Alignment> DerefMut for ABox<T, A> {
     }
 }
 
+impl<T: ?Sized, A: Alignment> AsRef<T> for ABox<T, A> {
+    #[inline]
+    fn as_ref(&self) -> &T {
+        &**self
+    }
+}
+
+impl<T: ?Sized, A: Alignment> AsMut<T> for ABox<T, A> {
+    #[inline]
+    fn as_mut(&mut self) -> &mut T {
+        &mut **self
+    }
+}
+
 struct AllocDrop {
     ptr: *mut u8,
     size_bytes: usize,
@@ -146,9 +176,9 @@ impl Drop for AllocDrop {
     fn drop(&mut self) {
         if self.size_bytes > 0 {
             unsafe {
-                std::alloc::dealloc(
+                alloc::alloc::dealloc(
                     self.ptr,
-                    std::alloc::Layout::from_size_align_unchecked(self.size_bytes, self.align),
+                    alloc::alloc::Layout::from_size_align_unchecked(self.size_bytes, self.align),
                 )
             }
         }
@@ -182,6 +212,20 @@ impl<T, A: Alignment> DerefMut for AVec<T, A> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_mut_slice()
+    }
+}
+
+impl<T, A: Alignment> AsRef<[T]> for AVec<T, A> {
+    #[inline]
+    fn as_ref(&self) -> &[T] {
+        &**self
+    }
+}
+
+impl<T, A: Alignment> AsMut<[T]> for AVec<T, A> {
+    #[inline]
+    fn as_mut(&mut self) -> &mut [T] {
+        &mut **self
     }
 }
 
@@ -387,7 +431,7 @@ impl<T, A: Alignment> AVec<T, A> {
 
         // ptr points to `len` initialized elements and is properly aligned since
         // self.align is at least `align_of::<T>()`
-        unsafe { std::slice::from_raw_parts(ptr, len) }
+        unsafe { core::slice::from_raw_parts(ptr, len) }
     }
 
     /// Returns a mutable reference to a slice over the objects held by the vector.
@@ -399,7 +443,7 @@ impl<T, A: Alignment> AVec<T, A> {
 
         // ptr points to `len` initialized elements and is properly aligned since
         // self.align is at least `align_of::<T>()`
-        unsafe { std::slice::from_raw_parts_mut(ptr, len) }
+        unsafe { core::slice::from_raw_parts_mut(ptr, len) }
     }
 
     /// Push the given value to the end of the vector, reallocating if needed.
@@ -457,7 +501,7 @@ impl<T, A: Alignment> AVec<T, A> {
             self.len = len;
             unsafe {
                 let ptr = self.as_mut_ptr();
-                std::ptr::slice_from_raw_parts_mut(ptr.add(len), old_len - len).drop_in_place()
+                core::ptr::slice_from_raw_parts_mut(ptr.add(len), old_len - len).drop_in_place()
             }
         }
     }
@@ -469,7 +513,7 @@ impl<T, A: Alignment> AVec<T, A> {
         self.len = 0;
         unsafe {
             let ptr = self.as_mut_ptr();
-            std::ptr::slice_from_raw_parts_mut(ptr, old_len).drop_in_place()
+            core::ptr::slice_from_raw_parts_mut(ptr, old_len).drop_in_place()
         }
     }
 
@@ -481,7 +525,7 @@ impl<T, A: Alignment> AVec<T, A> {
         this.shrink_to_fit();
         let (ptr, align, len, _) = this.into_raw_parts();
         unsafe {
-            ABox::<[T], A>::from_raw_parts(align, std::ptr::slice_from_raw_parts_mut(ptr, len))
+            ABox::<[T], A>::from_raw_parts(align, core::ptr::slice_from_raw_parts_mut(ptr, len))
         }
     }
 
@@ -547,7 +591,7 @@ impl<T, A: Alignment> AVec<T, A> {
     where
         T: Clone,
     {
-        Self::from_iter(align, std::iter::repeat(elem).take(count))
+        Self::from_iter(align, core::iter::repeat(elem).take(count))
     }
 
     #[inline(always)]
@@ -556,20 +600,20 @@ impl<T, A: Alignment> AVec<T, A> {
     pub fn __copy_from_ptr(align: usize, src: *const T, len: usize) -> Self {
         let mut v = Self::with_capacity(align, len);
         let dst = v.as_mut_ptr();
-        unsafe { std::ptr::copy_nonoverlapping(src, dst, len) };
+        unsafe { core::ptr::copy_nonoverlapping(src, dst, len) };
         v.len = len;
         v
     }
 }
 
 impl<T: Debug, A: Alignment> Debug for AVec<T, A> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_list().entries(self.iter()).finish()
     }
 }
 
 impl<T: Debug + ?Sized, A: Alignment> Debug for ABox<T, A> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         (&**self).fmt(f)
     }
 }
@@ -599,12 +643,12 @@ impl<T: PartialEq, A: Alignment> PartialEq for AVec<T, A> {
 }
 impl<T: Eq, A: Alignment> Eq for AVec<T, A> {}
 impl<T: PartialOrd, A: Alignment> PartialOrd for AVec<T, A> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         self.as_slice().partial_cmp(other.as_slice())
     }
 }
 impl<T: Ord, A: Alignment> Ord for AVec<T, A> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.as_slice().cmp(other.as_slice())
     }
 }
@@ -616,12 +660,12 @@ impl<T: PartialEq + ?Sized, A: Alignment> PartialEq for ABox<T, A> {
 }
 impl<T: Eq + ?Sized, A: Alignment> Eq for ABox<T, A> {}
 impl<T: PartialOrd + ?Sized, A: Alignment> PartialOrd for ABox<T, A> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         (&**self).partial_cmp(&**other)
     }
 }
 impl<T: Ord + ?Sized, A: Alignment> Ord for ABox<T, A> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         (&**self).cmp(&**other)
     }
 }
@@ -629,6 +673,95 @@ unsafe impl<T: Sync, A: Alignment + Sync> Sync for AVec<T, A> {}
 unsafe impl<T: Send, A: Alignment + Send> Send for AVec<T, A> {}
 unsafe impl<T: ?Sized + Sync, A: Alignment + Sync> Sync for ABox<T, A> {}
 unsafe impl<T: ?Sized + Send, A: Alignment + Send> Send for ABox<T, A> {}
+
+#[cfg(feature = "serde")]
+mod serde {
+    use super::*;
+    use ::serde::{Deserialize, Serialize};
+
+    #[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
+    impl<T: ?Sized + Serialize, A: Alignment> Serialize for ABox<T, A> {
+        #[inline]
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: ::serde::Serializer,
+        {
+            (&**self).serialize(serializer)
+        }
+    }
+
+    #[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
+    impl<T: Serialize, A: Alignment> Serialize for AVec<T, A> {
+        #[inline]
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: ::serde::Serializer,
+        {
+            (&**self).serialize(serializer)
+        }
+    }
+
+    #[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
+    impl<'de, T: Deserialize<'de>, const N: usize> Deserialize<'de> for ABox<T, ConstAlign<N>> {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: ::serde::Deserializer<'de>,
+        {
+            Ok(ABox::<T, ConstAlign<N>>::new(
+                N,
+                T::deserialize(deserializer)?,
+            ))
+        }
+    }
+
+    #[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
+    impl<'de, T: Deserialize<'de>, const N: usize> Deserialize<'de> for ABox<[T], ConstAlign<N>> {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: ::serde::Deserializer<'de>,
+        {
+            Ok(AVec::<T, ConstAlign<N>>::deserialize(deserializer)?.into_boxed_slice())
+        }
+    }
+
+    #[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
+    impl<'de, T: Deserialize<'de>, const N: usize> Deserialize<'de> for AVec<T, ConstAlign<N>> {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: ::serde::Deserializer<'de>,
+        {
+            struct AVecVisitor<T, const N: usize> {
+                _marker: PhantomData<fn() -> AVec<T, ConstAlign<N>>>,
+            }
+
+            impl<'de, T: Deserialize<'de>, const N: usize> ::serde::de::Visitor<'de> for AVecVisitor<T, N> {
+                type Value = AVec<T, ConstAlign<N>>;
+
+                fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
+                    formatter.write_str("a sequence")
+                }
+
+                fn visit_seq<S>(self, mut seq: S) -> Result<Self::Value, S::Error>
+                where
+                    S: ::serde::de::SeqAccess<'de>,
+                {
+                    let mut vec =
+                        AVec::<T, ConstAlign<N>>::with_capacity(N, seq.size_hint().unwrap_or(0));
+
+                    while let Some(elem) = seq.next_element::<T>()? {
+                        vec.push(elem)
+                    }
+
+                    Ok(vec)
+                }
+            }
+
+            deserializer.deserialize_seq(AVecVisitor {
+                _marker: PhantomData,
+            })
+        }
+    }
+}
 
 /// Create a vector that is aligned to a cache line boundary.
 #[macro_export]
@@ -672,9 +805,10 @@ macro_rules! avec_rt {
 
 #[cfg(test)]
 mod tests {
-    use std::iter::repeat;
+    use core::iter::repeat;
 
     use super::*;
+    use alloc::vec;
 
     #[test]
     fn new() {

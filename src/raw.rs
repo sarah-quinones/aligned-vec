@@ -1,10 +1,10 @@
 use crate::Alignment;
-use std::{
-    alloc::{alloc, dealloc, handle_alloc_error, realloc, Layout},
+use core::{
     marker::PhantomData,
     mem::{align_of, size_of},
     ptr::{null_mut, NonNull},
 };
+use alloc::alloc::{alloc, dealloc, handle_alloc_error, realloc, Layout};
 
 pub struct ARawVec<T, A: Alignment> {
     pub ptr: NonNull<T>,
@@ -19,7 +19,7 @@ impl<T, A: Alignment> Drop for ARawVec<T, A> {
         // this can't overflow since we already have this much stored in a slice
         let size_bytes = self.capacity * size_of::<T>();
         if size_bytes > 0 {
-            // SAFETY: memory was allocated with std::alloc::alloc
+            // SAFETY: memory was allocated with alloc::alloc::alloc
             unsafe {
                 dealloc(
                     self.ptr.as_ptr() as *mut u8,
@@ -41,7 +41,7 @@ impl<T, A: Alignment> ARawVec<T, A> {
     /// # Safety
     ///
     /// `align` must be a power of two.  
-    /// `align` must be greater than or equal to `std::mem::align_of::<T>()`.
+    /// `align` must be greater than or equal to `core::mem::align_of::<T>()`.
     #[inline]
     pub unsafe fn new_unchecked(align: usize) -> Self {
         let cap = if size_of::<T>() == 0 { usize::MAX } else { 0 };
@@ -51,7 +51,7 @@ impl<T, A: Alignment> ARawVec<T, A> {
     /// # Safety
     ///
     /// `align` must be a power of two.  
-    /// `align` must be greater than or equal to `std::mem::align_of::<T>()`.
+    /// `align` must be greater than or equal to `core::mem::align_of::<T>()`.
     #[inline]
     pub unsafe fn with_capacity_unchecked(capacity: usize, align: usize) -> Self {
         if capacity == 0 || size_of::<T>() == 0 {
