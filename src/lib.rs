@@ -678,14 +678,6 @@ impl<T, A: Alignment> AVec<T, A> {
     }
 }
 
-/// Used to ensure len is set correctly on panic
-struct SetLenOnDrop<'a>(usize, &'a mut usize);
-impl<'a> Drop for SetLenOnDrop<'a> {
-    fn drop(&mut self) {
-        *self.1 = self.0;
-    }
-}
-
 impl<T: Clone, A: Alignment> AVec<T, A> {
     /// Resizes the `Vec` in-place so that `len` is equal to `new_len`.
     ///
@@ -710,26 +702,20 @@ impl<T: Clone, A: Alignment> AVec<T, A> {
 
         unsafe {
             let mut ptr = self.as_mut_ptr().add(self.len());
-            // Use SetLenOnDrop to work around bug where compiler
-            // might not realize the store through `ptr` through self.set_len()
-            // don't alias.
-            let mut local_len = SetLenOnDrop(0, &mut self.len);
 
             // Write all elements except the last one
             for _ in 1..n {
                 std::ptr::write(ptr, value.clone());
                 ptr = ptr.add(1);
                 // Increment the length in every step in case clone() panics
-                local_len.0 += 1;
+                self.len += 1;
             }
 
             if n > 0 {
                 // We can write the last element directly without cloning needlessly
                 std::ptr::write(ptr, value);
-                local_len.0 += 1;
+                self.len += 1;
             }
-
-            // `len` set by scope guard
         }
     }
 
@@ -1004,6 +990,31 @@ mod tests {
     }
 
     #[test]
+    fn insert() {
+        let mut v = AVec::<i32>::new(16);
+        v.insert(0, 1);
+        v.insert(1, 3);
+        v.insert(1, 2);
+        v.insert(0, 0);
+        assert_eq!(&*v, &[0, 1, 2, 3]);
+
+        let mut v = AVec::<_>::from_iter(64, 0..4);
+        v.insert(0, -1);
+        v.insert(5, 5);
+        v.insert(5, 4);
+        v.insert(1, 0);
+        v.insert(2, 0);
+        assert_eq!(&*v, &[-1, 0, 0, 0, 1, 2, 3, 4, 5]);
+
+        let mut v = AVec::<_>::from_iter(64, repeat(()).take(4));
+        v.insert(3, ());
+        v.insert(0, ());
+        v.insert(2, ());
+        v.insert(7, ());
+        assert_eq!(&*v, &[(), (), (), (), (), (), (), ()]);
+    }
+
+    #[test]
     fn pop() {
         let mut v = AVec::<i32>::new(16);
         v.push(0);
@@ -1030,6 +1041,33 @@ mod tests {
         assert_eq!(v.pop(), Some(()));
         assert_eq!(v.pop(), None);
         assert_eq!(v.pop(), None);
+        assert_eq!(&*v, &[]);
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn remove() {
+        let mut v = AVec::<i32>::new(16);
+        v.push(0);
+        v.push(1);
+        v.push(2);
+        v.push(3);
+        assert_eq!(v.remove(2), 2);
+        assert_eq!(v.remove(2), 3);
+        assert_eq!(v.remove(0), 0);
+        assert_eq!(v.remove(0), 1);
+        assert_eq!(&*v, &[]);
+        assert!(v.is_empty());
+
+        let mut v = AVec::<()>::new(16);
+        v.push(());
+        v.push(());
+        v.push(());
+        v.push(());
+        assert_eq!(v.remove(0), ());
+        assert_eq!(v.remove(0), ());
+        assert_eq!(v.remove(0), ());
+        assert_eq!(v.remove(0), ());
         assert_eq!(&*v, &[]);
         assert!(v.is_empty());
     }
@@ -1084,6 +1122,48 @@ mod tests {
         v.clear();
         assert_eq!(v.len(), 0);
         assert_eq!(&*v, &[]);
+    }
+
+    #[test]
+    fn extend_from_slice() {
+        let mut v = AVec::<i32>::new(16);
+        v.extend_from_slice(&[0, 1, 2, 3]);
+        v.extend_from_slice(&[4, 5, 6, 7, 8]);
+        assert_eq!(&*v, &[0, 1, 2, 3, 4, 5, 6, 7, 8]);
+
+        let mut v = AVec::<()>::new(16);
+        v.extend_from_slice(&[(), (), (), ()]);
+        v.extend_from_slice(&[(), (), ()]);
+        assert_eq!(&*v, &[(), (), (), (), (), (), ()]);
+    }
+
+    #[test]
+    fn resize() {
+        let mut v = AVec::<i32>::new(16);
+        v.push(0);
+        v.push(1);
+        v.push(2);
+
+        v.resize(1, 10);
+        assert_eq!(v.len(), 1);
+        assert_eq!(&*v, &[0]);
+
+        v.resize(3, 20);
+        assert_eq!(v.len(), 3);
+        assert_eq!(&*v, &[0, 20, 20]);
+
+        let mut v = AVec::<()>::new(16);
+        v.push(());
+        v.push(());
+        v.push(());
+
+        v.resize(2, ());
+        assert_eq!(v.len(), 2);
+        assert_eq!(&*v, &[(), ()]);
+
+        v.resize(3, ());
+        assert_eq!(v.len(), 3);
+        assert_eq!(&*v, &[(), (), ()]);
     }
 
     #[test]
