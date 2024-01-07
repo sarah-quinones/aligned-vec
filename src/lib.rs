@@ -529,6 +529,78 @@ impl<T, A: Alignment> AVec<T, A> {
         }
     }
 
+    /// Inserts an element at position `index` within the vector, shifting all elements after it to the right.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index > len`.
+    pub fn insert(&mut self, index: usize, element: T) {
+        // Copied somewhat from the standard library
+        #[cold]
+        #[cfg_attr(not(feature = "panic_immediate_abort"), inline(never))]
+        #[track_caller]
+        fn assert_failed(index: usize, len: usize) -> ! {
+            panic!("insertion index (is {index}) should be <= len (is {len})");
+        }
+
+        let len = self.len();
+
+        // Add space for the new element
+        self.reserve(1);
+
+        unsafe {
+            let p = self.as_mut_ptr().add(index);
+            if index < len {
+                // Shift everything over to make space. (Duplicating the
+                // `index`th element into two consecutive places.)
+                std::ptr::copy(p, p.add(1), len - index);
+            } else if index == len {
+                // No elements need shifting.
+            } else {
+                assert_failed(index, len);
+            }
+            std::ptr::write(p, element);
+
+            self.len += 1;
+        }
+    }
+
+    /// Removes and returns the element at position `index` within the vector,
+    /// shifting all elements after it to the left.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is out of bounds.
+    pub fn remove(&mut self, index: usize) -> T {
+        // Copied somewhat from the standard library
+        #[cold]
+        #[cfg_attr(not(feature = "panic_immediate_abort"), inline(never))]
+        #[track_caller]
+        fn assert_failed(index: usize, len: usize) -> ! {
+            panic!("removal index (is {index}) should be < len (is {len})");
+        }
+
+        let len = self.len();
+        if index >= len {
+            assert_failed(index, len);
+        }
+
+        unsafe {
+            // The place we are taking from.
+            let ptr = self.as_mut_ptr().add(index);
+            // Copy it out, unsafely having a copy of the value on
+            // the stack and in the vector at the same time.
+            let ret = std::ptr::read(ptr);
+
+            // Shift everything down to fill in that spot.
+            std::ptr::copy(ptr.add(1), ptr, len - index - 1);
+
+            self.len -= 1;
+
+            ret
+        }
+    }
+
     /// Collects an iterator into an [`AVec<T>`] with the provided alignment.
     #[inline]
     pub fn from_iter<I: IntoIterator<Item = T>>(align: usize, iter: I) -> Self {
@@ -603,6 +675,72 @@ impl<T, A: Alignment> AVec<T, A> {
         unsafe { core::ptr::copy_nonoverlapping(src, dst, len) };
         v.len = len;
         v
+    }
+}
+
+/// Used to ensure len is set correctly on panic
+struct SetLenOnDrop<'a>(usize, &'a mut usize);
+impl<'a> Drop for SetLenOnDrop<'a> {
+    fn drop(&mut self) {
+        *self.1 = self.0;
+    }
+}
+
+impl<T: Clone, A: Alignment> AVec<T, A> {
+    /// Resizes the `Vec` in-place so that `len` is equal to `new_len`.
+    ///
+    /// If `new_len` is greater than `len`, the `Vec` is extended by the
+    /// difference, with each additional slot filled with `value`.
+    /// If `new_len` is less than `len`, the `Vec` is simply truncated.
+    pub fn resize(&mut self, new_len: usize, value: T) {
+        // Copied somewhat from the standard library
+        let len = self.len();
+
+        if new_len > len {
+            self.extend_with(new_len - len, value)
+        } else {
+            self.truncate(new_len);
+        }
+    }
+
+    /// Extend the vector by `n` clones of value.
+    fn extend_with(&mut self, n: usize, value: T) {
+        // Copied somewhat from the standard library
+        self.reserve(n);
+
+        unsafe {
+            let mut ptr = self.as_mut_ptr().add(self.len());
+            // Use SetLenOnDrop to work around bug where compiler
+            // might not realize the store through `ptr` through self.set_len()
+            // don't alias.
+            let mut local_len = SetLenOnDrop(0, &mut self.len);
+
+            // Write all elements except the last one
+            for _ in 1..n {
+                std::ptr::write(ptr, value.clone());
+                ptr = ptr.add(1);
+                // Increment the length in every step in case clone() panics
+                local_len.0 += 1;
+            }
+
+            if n > 0 {
+                // We can write the last element directly without cloning needlessly
+                std::ptr::write(ptr, value);
+                local_len.0 += 1;
+            }
+
+            // `len` set by scope guard
+        }
+    }
+
+    /// Clones and appends all elements in a slice to the `Vec`.
+    pub fn extend_from_slice(&mut self, other: &[T]) {
+        // Copied somewhat from the standard library
+        let count = other.len();
+        self.reserve(count);
+        let len = self.len();
+        unsafe { std::ptr::copy_nonoverlapping(other.as_ptr(), self.as_mut_ptr().add(len), count) };
+        self.len += count;
     }
 }
 
