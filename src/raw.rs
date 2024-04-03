@@ -1,10 +1,10 @@
-use crate::Alignment;
+use crate::{Alignment, TryReserveError};
+use alloc::alloc::{alloc, dealloc, handle_alloc_error, realloc, Layout};
 use core::{
     marker::PhantomData,
     mem::{align_of, size_of},
     ptr::{null_mut, NonNull},
 };
-use alloc::alloc::{alloc, dealloc, handle_alloc_error, realloc, Layout};
 
 pub struct ARawVec<T, A: Alignment> {
     pub ptr: NonNull<T>,
@@ -67,6 +67,31 @@ impl<T, A: Alignment> ARawVec<T, A> {
                 align: A::new(align, align_of::<T>()),
                 _marker: PhantomData,
             }
+        }
+    }
+
+    /// # Safety
+    ///
+    /// `align` must be a power of two.  
+    /// `align` must be greater than or equal to `core::mem::align_of::<T>()`.
+    #[inline]
+    pub unsafe fn try_with_capacity_unchecked(
+        capacity: usize,
+        align: usize,
+    ) -> Result<Self, TryReserveError> {
+        if capacity == 0 || size_of::<T>() == 0 {
+            Ok(Self::new_unchecked(align))
+        } else {
+            Ok(Self {
+                ptr: NonNull::<T>::new_unchecked(try_with_capacity_unchecked(
+                    capacity,
+                    align,
+                    size_of::<T>(),
+                )? as *mut T),
+                capacity,
+                align: A::new(align, align_of::<T>()),
+                _marker: PhantomData,
+            })
         }
     }
 
@@ -144,6 +169,86 @@ impl<T, A: Alignment> ARawVec<T, A> {
 
         self.capacity = new_cap;
         self.ptr = NonNull::<T>::new_unchecked(ptr);
+    }
+
+    pub unsafe fn try_grow_amortized(
+        &mut self,
+        len: usize,
+        additional: usize,
+    ) -> Result<(), TryReserveError> {
+        debug_assert!(additional > 0);
+        if self.capacity == 0 {
+            *self = Self::try_with_capacity_unchecked(
+                additional.max(Self::MIN_NON_ZERO_CAP),
+                self.align.alignment(align_of::<T>()),
+            )?;
+            return Ok(());
+        }
+
+        if size_of::<T>() == 0 {
+            debug_assert_eq!(self.capacity, usize::MAX);
+            return Err(TryReserveError::CapacityOverflow);
+        }
+
+        let new_cap = match len.checked_add(additional) {
+            Some(cap) => cap,
+            None => return Err(TryReserveError::CapacityOverflow),
+        };
+
+        // self.cap * 2 can't overflow because it's less than isize::MAX
+        let new_cap = new_cap.max(self.capacity * 2);
+        let new_cap = new_cap.max(Self::MIN_NON_ZERO_CAP);
+
+        let ptr = {
+            try_grow_unchecked(
+                self.as_mut_ptr() as *mut u8,
+                self.capacity,
+                new_cap,
+                self.align.alignment(align_of::<T>()),
+                size_of::<T>(),
+            )? as *mut T
+        };
+
+        self.capacity = new_cap;
+        self.ptr = NonNull::<T>::new_unchecked(ptr);
+        Ok(())
+    }
+
+    pub unsafe fn try_grow_exact(
+        &mut self,
+        len: usize,
+        additional: usize,
+    ) -> Result<(), TryReserveError> {
+        debug_assert!(additional > 0);
+        if size_of::<T>() == 0 {
+            debug_assert_eq!(self.capacity, usize::MAX);
+            return Err(TryReserveError::CapacityOverflow);
+        }
+
+        if self.capacity == 0 {
+            *self = Self::try_with_capacity_unchecked(
+                additional,
+                self.align.alignment(align_of::<T>()),
+            )?;
+            return Ok(());
+        }
+
+        let new_cap = match len.checked_add(additional) {
+            Some(cap) => cap,
+            None => return Err(TryReserveError::CapacityOverflow),
+        };
+
+        let ptr = try_grow_unchecked(
+            self.as_mut_ptr() as *mut u8,
+            self.capacity,
+            new_cap,
+            self.align.alignment(align_of::<T>()),
+            size_of::<T>(),
+        )? as *mut T;
+
+        self.capacity = new_cap;
+        self.ptr = NonNull::<T>::new_unchecked(ptr);
+        Ok(())
     }
 
     pub unsafe fn shrink_to(&mut self, len: usize) {
@@ -249,6 +354,59 @@ unsafe fn grow_unchecked(
     }
 
     ptr
+}
+
+pub unsafe fn try_with_capacity_unchecked(
+    capacity: usize,
+    align: usize,
+    size_of: usize,
+) -> Result<*mut u8, TryReserveError> {
+    let size_bytes = match capacity.checked_mul(size_of) {
+        Some(size_bytes) => size_bytes,
+        None => return Err(TryReserveError::CapacityOverflow),
+    };
+    debug_assert!(size_bytes > 0);
+    let will_overflow = size_bytes > usize::MAX - (align - 1);
+    if will_overflow || !is_valid_alloc(size_bytes) {
+        return Err(TryReserveError::CapacityOverflow);
+    }
+
+    let layout = Layout::from_size_align_unchecked(size_bytes, align);
+    let ptr = alloc(layout);
+    if ptr.is_null() {
+        return Err(TryReserveError::AllocError { layout });
+    }
+    Ok(ptr)
+}
+
+unsafe fn try_grow_unchecked(
+    old_ptr: *mut u8,
+    old_capacity: usize,
+    new_capacity: usize,
+    align: usize,
+    size_of: usize,
+) -> Result<*mut u8, TryReserveError> {
+    let new_size_bytes = match new_capacity.checked_mul(size_of) {
+        Some(size_bytes) => size_bytes,
+        None => return Err(TryReserveError::CapacityOverflow),
+    };
+    let will_overflow = new_size_bytes > usize::MAX - (align - 1);
+    if will_overflow || !is_valid_alloc(new_size_bytes) {
+        return Err(TryReserveError::CapacityOverflow);
+    }
+
+    // can't overflow because we already allocated this much
+    let old_size_bytes = old_capacity * size_of;
+    let old_layout = Layout::from_size_align_unchecked(old_size_bytes, align);
+
+    let ptr = realloc(old_ptr, old_layout, new_size_bytes);
+
+    if ptr.is_null() {
+        let layout = Layout::from_size_align_unchecked(new_size_bytes, align);
+        return Err(TryReserveError::AllocError { layout });
+    }
+
+    Ok(ptr)
 }
 
 #[inline]

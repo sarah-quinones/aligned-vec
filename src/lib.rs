@@ -15,6 +15,7 @@
 //! - `serde`: Implements serialization and deserialization features for `ABox` and `AVec`.
 
 use core::{
+    alloc::Layout,
     fmt::Debug,
     marker::PhantomData,
     mem::{align_of, size_of, ManuallyDrop},
@@ -98,6 +99,10 @@ impl<const ALIGN: usize> private::Seal for ConstAlign<ALIGN> {}
 impl Alignment for RuntimeAlign {
     #[inline]
     fn new(align: usize, minimum_align: usize) -> Self {
+        assert!(
+            align.is_power_of_two(),
+            "alignment ({align}) is not a power of two.",
+        );
         RuntimeAlign {
             align: fix_alignment(align, minimum_align),
         }
@@ -112,8 +117,20 @@ impl Alignment for RuntimeAlign {
 impl<const ALIGN: usize> Alignment for ConstAlign<ALIGN> {
     #[inline]
     fn new(align: usize, minimum_align: usize) -> Self {
-        let _ = align;
         let _ = minimum_align;
+        let max = Ord::max;
+        assert!(
+            align.is_power_of_two(),
+            "alignment ({align}) is not a power of two.",
+        );
+        assert!(
+            ALIGN.is_power_of_two(),
+            "alignment ({ALIGN}) is not a power of two.",
+        );
+        assert!(
+            align <= max(ALIGN, minimum_align),
+            "provided alignment ({align}) is greater than the specified constant value ({ALIGN})",
+        );
         ConstAlign::<ALIGN>
     }
 
@@ -124,12 +141,16 @@ impl<const ALIGN: usize> Alignment for ConstAlign<ALIGN> {
 }
 
 /// Aligned vector. See [`Vec`] for more info.
+///
+/// Note: passing an alignment value of `0` or a power of two that is less than the minimum alignment will cause the vector to use the minimum valid alignment for the type `T` and alignment type `A`.
 pub struct AVec<T, A: Alignment = ConstAlign<CACHELINE_ALIGN>> {
     buf: ARawVec<T, A>,
     len: usize,
 }
 
 /// Aligned box. See [`Box`] for more info.
+///
+/// Note: passing an alignment value of `0` or a power of two that is less than the minimum alignment will cause the vector to use the minimum valid alignment for the type `T` and alignment type `A`.
 pub struct ABox<T: ?Sized, A: Alignment = ConstAlign<CACHELINE_ALIGN>> {
     ptr: NonNull<T>,
     align: A,
@@ -268,8 +289,8 @@ impl<T: ?Sized, A: Alignment> ABox<T, A> {
 
     /// Decomposes a [`ABox<T>`] into its raw parts: `(ptr, alignment)`.
     #[inline]
-    pub fn into_raw_parts(self) -> (*mut T, usize) {
-        let this = ManuallyDrop::new(self);
+    pub fn into_raw_parts(this: Self) -> (*mut T, usize) {
+        let this = ManuallyDrop::new(this);
         let align = core::mem::align_of_val(unsafe { &*this.ptr.as_ptr() });
         (this.ptr.as_ptr(), this.align.alignment(align))
     }
@@ -285,10 +306,13 @@ impl<T, A: Alignment> Drop for AVec<T, A> {
 
 #[inline]
 fn fix_alignment(align: usize, base_align: usize) -> usize {
-    align
-        .checked_next_power_of_two()
-        .unwrap_or(0)
-        .max(base_align)
+    align.max(base_align)
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum TryReserveError {
+    CapacityOverflow,
+    AllocError { layout: Layout },
 }
 
 impl<T, A: Alignment> AVec<T, A> {
@@ -387,6 +411,14 @@ impl<T, A: Alignment> AVec<T, A> {
         }
     }
 
+    pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        if additional > self.capacity().wrapping_sub(self.len) {
+            unsafe { self.buf.try_grow_amortized(self.len, additional) }
+        } else {
+            Ok(())
+        }
+    }
+
     /// Reserves enough capacity for exactly `additional` more elements to be inserted in the
     /// vector. After this call to `reserve`, capacity will be greater than or equal to `self.len() + additional`.
     /// Does nothing if the capacity is already sufficient.
@@ -398,6 +430,14 @@ impl<T, A: Alignment> AVec<T, A> {
     pub fn reserve_exact(&mut self, additional: usize) {
         if additional > self.capacity().wrapping_sub(self.len) {
             unsafe { self.buf.grow_exact(self.len, additional) };
+        }
+    }
+
+    pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        if additional > self.capacity().wrapping_sub(self.len) {
+            unsafe { self.buf.try_grow_exact(self.len, additional) }
+        } else {
+            Ok(())
         }
     }
 
@@ -657,6 +697,21 @@ impl<T, A: Alignment> AVec<T, A> {
         this
     }
 
+    pub unsafe fn set_len(&mut self, new_len: usize) {
+        self.len = new_len;
+    }
+
+    pub fn append<OtherA: Alignment>(&mut self, other: &mut AVec<T, OtherA>) {
+        unsafe {
+            let len = self.len();
+            let count = other.len();
+            self.reserve(count);
+            core::ptr::copy_nonoverlapping(other.as_ptr(), self.as_mut_ptr().add(len), count);
+            self.len += count;
+            other.len = 0;
+        }
+    }
+
     #[inline(always)]
     #[doc(hidden)]
     pub fn __from_elem(align: usize, elem: T, count: usize) -> Self
@@ -893,12 +948,27 @@ macro_rules! avec {
     () => {
         $crate::AVec::<_>::new(0)
     };
+    ([$align: expr]| ) => {
+        $crate::AVec::<_, $crate::ConstAlign::<$align>>::new(0)
+    };
+    ([$align: expr]| $elem: expr; $count: expr) => {
+        $crate::AVec::<_, $crate::ConstAlign::<$align>>::__from_elem(0, $elem, $count)
+    };
+    ([$align: expr]| $($elem: expr),*) => {
+        {
+            let __data = &::core::mem::ManuallyDrop::new([$($elem,)*]);
+            let __len = __data.len();
+            let __ptr = __data.as_ptr();
+            let mut __aligned_vec = $crate::AVec::<_, $crate::ConstAlign::<$align>>::__copy_from_ptr(0, __ptr, __len);
+            __aligned_vec
+        }
+    };
     ($elem: expr; $count: expr) => {
         $crate::AVec::<_>::__from_elem(0, $elem, $count)
     };
     ($($elem: expr),*) => {
         {
-            let __data = ::core::mem::ManuallyDrop::new([$($elem,)*]);
+            let __data = &::core::mem::ManuallyDrop::new([$($elem,)*]);
             let __len = __data.len();
             let __ptr = __data.as_ptr();
             let mut __aligned_vec = $crate::AVec::<_>::__copy_from_ptr(0, __ptr, __len);
@@ -918,7 +988,7 @@ macro_rules! avec_rt {
     };
     ([$align: expr]| $($elem: expr),*) => {
         {
-            let __data = ::core::mem::ManuallyDrop::new([$($elem,)*]);
+            let __data = &::core::mem::ManuallyDrop::new([$($elem,)*]);
             let __len = __data.len();
             let __ptr = __data.as_ptr();
             let mut __aligned_vec = $crate::AVec::<_>::__copy_from_ptr($align, __ptr, __len);
@@ -1210,6 +1280,27 @@ mod tests {
         w[3].pop();
         assert_eq!(w.len(), 4);
         assert_eq!(w.as_ptr().align_offset(CACHELINE_ALIGN), 0);
+        assert_eq!(w[0], vec![0, 1, 2]);
+        assert_eq!(w[1], vec![3, 4]);
+        assert_eq!(w[2], vec![5, 6]);
+        assert_eq!(w[3], vec![7]);
+    }
+
+    #[test]
+    fn macros_2() {
+        let u: AVec<(), _> = avec![[4096]| ];
+        assert_eq!(u.len(), 0);
+        assert_eq!(u.as_ptr().align_offset(4096), 0);
+
+        let v = avec![[4096]| 0; 4];
+        assert_eq!(v.len(), 4);
+        assert_eq!(v.as_ptr().align_offset(4096), 0);
+
+        let mut w = avec![[4096] | vec![0, 1], vec![3, 4], vec![5, 6], vec![7, 8]];
+        w[0].push(2);
+        w[3].pop();
+        assert_eq!(w.len(), 4);
+        assert_eq!(w.as_ptr().align_offset(4096), 0);
         assert_eq!(w[0], vec![0, 1, 2]);
         assert_eq!(w[1], vec![3, 4]);
         assert_eq!(w[2], vec![5, 6]);
