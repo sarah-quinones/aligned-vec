@@ -22,6 +22,7 @@ use core::{
     ops::{Deref, DerefMut},
     ptr::{null_mut, NonNull},
 };
+use equator::assert;
 use raw::ARawVec;
 
 mod raw;
@@ -96,13 +97,25 @@ pub struct ConstAlign<const ALIGN: usize>;
 impl private::Seal for RuntimeAlign {}
 impl<const ALIGN: usize> private::Seal for ConstAlign<ALIGN> {}
 
+impl<T, A: Alignment> core::convert::From<ABox<[T], A>> for AVec<T, A> {
+    #[inline]
+    fn from(value: ABox<[T], A>) -> Self {
+        let len = (*value).len();
+        let (ptr, align) = ABox::into_raw_parts(value);
+        unsafe { AVec::<T, A>::from_raw_parts(ptr as *mut T, align, len, len) }
+    }
+}
+
 impl Alignment for RuntimeAlign {
     #[inline]
+    #[track_caller]
     fn new(align: usize, minimum_align: usize) -> Self {
-        assert!(
-            align.is_power_of_two(),
-            "alignment ({align}) is not a power of two.",
-        );
+        if align != 0 {
+            assert!(
+                align.is_power_of_two(),
+                "alignment ({align}) is not a power of two.",
+            );
+        }
         RuntimeAlign {
             align: fix_alignment(align, minimum_align),
         }
@@ -116,13 +129,16 @@ impl Alignment for RuntimeAlign {
 }
 impl<const ALIGN: usize> Alignment for ConstAlign<ALIGN> {
     #[inline]
+    #[track_caller]
     fn new(align: usize, minimum_align: usize) -> Self {
         let _ = minimum_align;
         let max = Ord::max;
-        assert!(
-            align.is_power_of_two(),
-            "alignment ({align}) is not a power of two.",
-        );
+        if align != 0 {
+            assert!(
+                align.is_power_of_two(),
+                "alignment ({align}) is not a power of two.",
+            );
+        }
         assert!(
             ALIGN.is_power_of_two(),
             "alignment ({ALIGN}) is not a power of two.",
@@ -253,6 +269,7 @@ impl<T, A: Alignment> AsMut<[T]> for AVec<T, A> {
 impl<T, A: Alignment> ABox<T, A> {
     /// Creates a new [`ABox<T>`] containing `value` at an address aligned to `align` bytes.
     #[inline]
+    #[track_caller]
     pub fn new(align: usize, value: T) -> Self {
         let align = A::new(align, align_of::<T>()).alignment(align_of::<T>());
         let ptr = if size_of::<T>() == 0 {
@@ -279,6 +296,7 @@ impl<T: ?Sized, A: Alignment> ABox<T, A> {
     /// The arguments to this function must be acquired from a previous call to
     /// [`Self::into_raw_parts`].
     #[inline]
+    #[track_caller]
     pub unsafe fn from_raw_parts(align: usize, ptr: *mut T) -> Self {
         Self {
             ptr: NonNull::<T>::new_unchecked(ptr),
@@ -319,6 +337,7 @@ impl<T, A: Alignment> AVec<T, A> {
     /// Returns a new [`AVec<T>`] with the provided alignment.
     #[inline]
     #[must_use]
+    #[track_caller]
     pub fn new(align: usize) -> Self {
         unsafe {
             Self {
@@ -338,6 +357,7 @@ impl<T, A: Alignment> AVec<T, A> {
     /// Panics if the capacity exceeds `isize::MAX` bytes.
     #[inline]
     #[must_use]
+    #[track_caller]
     pub fn with_capacity(align: usize, capacity: usize) -> Self {
         unsafe {
             Self {
@@ -574,10 +594,11 @@ impl<T, A: Alignment> AVec<T, A> {
     /// # Panics
     ///
     /// Panics if `index > len`.
+    #[track_caller]
     pub fn insert(&mut self, index: usize, element: T) {
         // Copied somewhat from the standard library
         #[cold]
-        #[cfg_attr(not(feature = "panic_immediate_abort"), inline(never))]
+        #[inline(never)]
         #[track_caller]
         fn assert_failed(index: usize, len: usize) -> ! {
             panic!("insertion index (is {index}) should be <= len (is {len})");
@@ -611,10 +632,11 @@ impl<T, A: Alignment> AVec<T, A> {
     /// # Panics
     ///
     /// Panics if `index` is out of bounds.
+    #[track_caller]
     pub fn remove(&mut self, index: usize) -> T {
         // Copied somewhat from the standard library
         #[cold]
-        #[cfg_attr(not(feature = "panic_immediate_abort"), inline(never))]
+        #[inline(never)]
         #[track_caller]
         fn assert_failed(index: usize, len: usize) -> ! {
             panic!("removal index (is {index}) should be < len (is {len})");
@@ -697,6 +719,7 @@ impl<T, A: Alignment> AVec<T, A> {
         this
     }
 
+    #[inline]
     pub unsafe fn set_len(&mut self, new_len: usize) {
         self.len = new_len;
     }
@@ -999,19 +1022,19 @@ macro_rules! avec_rt {
 
 #[cfg(test)]
 mod tests {
-    use core::iter::repeat;
-
     use super::*;
     use alloc::vec;
+    use core::iter::repeat;
+    use equator::assert;
 
     #[test]
     fn new() {
-        let v = AVec::<i32>::new(15);
+        let v = AVec::<i32>::new(32);
         assert_eq!(v.len(), 0);
         assert_eq!(v.capacity(), 0);
         assert_eq!(v.alignment(), CACHELINE_ALIGN);
         assert_eq!(v.as_ptr().align_offset(CACHELINE_ALIGN), 0);
-        let v = AVec::<()>::new(15);
+        let v = AVec::<()>::new(32);
         assert_eq!(v.len(), 0);
         assert_eq!(v.capacity(), usize::MAX);
         assert_eq!(v.alignment(), CACHELINE_ALIGN);
@@ -1019,7 +1042,7 @@ mod tests {
 
         #[repr(align(4096))]
         struct OverAligned;
-        let v = AVec::<OverAligned>::new(15);
+        let v = AVec::<OverAligned>::new(32);
         assert_eq!(v.len(), 0);
         assert_eq!(v.capacity(), usize::MAX);
         assert_eq!(v.alignment(), 4096);
