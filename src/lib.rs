@@ -614,13 +614,13 @@ impl<T, A: Alignment> AVec<T, A> {
             if index < len {
                 // Shift everything over to make space. (Duplicating the
                 // `index`th element into two consecutive places.)
-                std::ptr::copy(p, p.add(1), len - index);
+                core::ptr::copy(p, p.add(1), len - index);
             } else if index == len {
                 // No elements need shifting.
             } else {
                 assert_failed(index, len);
             }
-            std::ptr::write(p, element);
+            core::ptr::write(p, element);
 
             self.len += 1;
         }
@@ -652,10 +652,10 @@ impl<T, A: Alignment> AVec<T, A> {
             let ptr = self.as_mut_ptr().add(index);
             // Copy it out, unsafely having a copy of the value on
             // the stack and in the vector at the same time.
-            let ret = std::ptr::read(ptr);
+            let ret = core::ptr::read(ptr);
 
             // Shift everything down to fill in that spot.
-            std::ptr::copy(ptr.add(1), ptr, len - index - 1);
+            core::ptr::copy(ptr.add(1), ptr, len - index - 1);
 
             self.len -= 1;
 
@@ -783,7 +783,7 @@ impl<T: Clone, A: Alignment> AVec<T, A> {
 
             // Write all elements except the last one
             for _ in 1..n {
-                std::ptr::write(ptr, value.clone());
+                core::ptr::write(ptr, value.clone());
                 ptr = ptr.add(1);
                 // Increment the length in every step in case clone() panics
                 self.len += 1;
@@ -791,7 +791,7 @@ impl<T: Clone, A: Alignment> AVec<T, A> {
 
             if n > 0 {
                 // We can write the last element directly without cloning needlessly
-                std::ptr::write(ptr, value);
+                core::ptr::write(ptr, value);
                 self.len += 1;
             }
         }
@@ -803,7 +803,9 @@ impl<T: Clone, A: Alignment> AVec<T, A> {
         let count = other.len();
         self.reserve(count);
         let len = self.len();
-        unsafe { std::ptr::copy_nonoverlapping(other.as_ptr(), self.as_mut_ptr().add(len), count) };
+        unsafe {
+            core::ptr::copy_nonoverlapping(other.as_ptr(), self.as_mut_ptr().add(len), count)
+        };
         self.len += count;
     }
 }
