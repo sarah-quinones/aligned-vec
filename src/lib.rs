@@ -982,7 +982,25 @@ mod serde {
     }
 }
 
-/// Create a vector that is aligned to a cache line boundary.
+/// Creates a [`AVec`] containing the arguments.
+///
+/// `avec!` follows similar syntax to `vec!` but allows for specifying an alignment value.
+/// You can either specifiy the alignment value explicitly
+/// ```rust
+/// use aligned_vec::{avec, CACHELINE_ALIGN};
+/// let v = avec![[64]| 1, 2, 3, 4];
+/// assert_eq!(v[0], 1);
+/// assert_eq!(v.alignment(), 64);
+/// assert_eq!(v.as_ptr().align_offset(64), 0);
+/// ```
+/// or dont specify it, which will use the default alignment value of `CACHELINE_ALIGN`
+/// ```rust
+/// use aligned_vec::{avec, CACHELINE_ALIGN};
+/// let v = avec![1, 2, 3, 4];
+/// assert_eq!(v[0], 1);
+/// assert_eq!(v.alignment(), CACHELINE_ALIGN);
+/// assert_eq!(v.as_ptr().align_offset(CACHELINE_ALIGN), 0);
+/// ```
 #[macro_export]
 macro_rules! avec {
     () => {
