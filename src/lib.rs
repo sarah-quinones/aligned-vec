@@ -950,8 +950,8 @@ mod serde {
                     S: ::serde::de::SeqAccess<'de>,
                 {
                     let mut vec =
-                        AVec::<T, ConstAlign<N>>::with_capacity(N, seq.size_hint().unwrap_or(0));
-
+                       AVec::<T, ConstAlign<N>>::with_capacity(N, cautious::<T>(seq.size_hint()));
+                    
                     while let Some(elem) = seq.next_element::<T>()? {
                         vec.push(elem)
                     }
@@ -965,7 +965,26 @@ mod serde {
             })
         }
     }
+
+    #[cfg(any(feature = "std"))]
+    pub fn cautious<Element>(hint: Option<usize>) -> usize {
+        use core::{cmp, mem};
+
+        const MAX_PREALLOC_BYTES: usize = 1024 * 1024;
+
+        if mem::size_of::<Element>() == 0 {
+            0
+        } else {
+            cmp::min(
+                hint.unwrap_or(0),
+                MAX_PREALLOC_BYTES / mem::size_of::<Element>(),
+            )
+        }
+    }
+
 }
+
+
 
 /// Create a vector that is aligned to a cache line boundary.
 #[macro_export]
@@ -1351,5 +1370,34 @@ mod tests {
         assert_eq!(w[1], vec![3, 4]);
         assert_eq!(w[2], vec![5, 6]);
         assert_eq!(w[3], vec![7]);
+    }
+}
+
+#[cfg(all(test, feature="serde"))]
+mod serde_tests {
+    use super::*;
+
+    use bincode::{DefaultOptions, Options, Deserializer};
+    use ::serde::Deserialize;
+
+    #[test]
+    fn can_limit_deserialization_size() {
+        let ser = vec![253, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 1, 1, 1, 1, 1, 1, 1, 1];
+
+        let options = DefaultOptions::new()
+            .with_limit(12);
+
+        let mut deserializer = Deserializer::from_slice(&ser, options);
+        let result = <AVec::<u32> as Deserialize>::deserialize(&mut deserializer);
+
+        let err = match result {
+            Ok(_) => panic!("Expected a failure"),
+            Err(e) => e
+        };
+
+        match *err {
+            bincode::ErrorKind::SizeLimit => {},
+            _ => panic!("Expected ErrorKind::SizeLimit, got {err:#?}")
+        };
     }
 }
