@@ -966,7 +966,6 @@ mod serde {
         }
     }
 
-    #[cfg(any(feature = "std"))]
     pub fn cautious<Element>(hint: Option<usize>) -> usize {
         use core::{cmp, mem};
 
@@ -1382,6 +1381,7 @@ mod serde_tests {
 
     #[test]
     fn can_limit_deserialization_size() {
+        // Malformed serialized data indicating a sequence of length u64::MAX.
         let ser = vec![253, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 1, 1, 1, 1, 1, 1, 1, 1];
 
         let options = DefaultOptions::new()
