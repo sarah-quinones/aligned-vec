@@ -1,4 +1,4 @@
-#![cfg_attr(not(feature = "std"), no_std)]
+#![no_std]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 //! # aligned-vec
@@ -950,8 +950,8 @@ mod serde {
                     S: ::serde::de::SeqAccess<'de>,
                 {
                     let mut vec =
-                       AVec::<T, ConstAlign<N>>::with_capacity(N, cautious::<T>(seq.size_hint()));
-                    
+                        AVec::<T, ConstAlign<N>>::with_capacity(N, cautious::<T>(seq.size_hint()));
+
                     while let Some(elem) = seq.next_element::<T>()? {
                         vec.push(elem)
                     }
@@ -980,10 +980,7 @@ mod serde {
             )
         }
     }
-
 }
-
-
 
 /// Create a vector that is aligned to a cache line boundary.
 #[macro_export]
@@ -1372,32 +1369,33 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature="serde"))]
+#[cfg(all(test, feature = "serde"))]
 mod serde_tests {
     use super::*;
 
-    use bincode::{DefaultOptions, Options, Deserializer};
     use ::serde::Deserialize;
+    use bincode::{DefaultOptions, Deserializer, Options};
 
     #[test]
     fn can_limit_deserialization_size() {
         // Malformed serialized data indicating a sequence of length u64::MAX.
-        let ser = vec![253, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 1, 1, 1, 1, 1, 1, 1, 1];
+        let ser = vec![
+            253, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 1, 1, 1, 1, 1, 1, 1, 1,
+        ];
 
-        let options = DefaultOptions::new()
-            .with_limit(12);
+        let options = DefaultOptions::new().with_limit(12);
 
         let mut deserializer = Deserializer::from_slice(&ser, options);
-        let result = <AVec::<u32> as Deserialize>::deserialize(&mut deserializer);
+        let result = <AVec<u32> as Deserialize>::deserialize(&mut deserializer);
 
         let err = match result {
             Ok(_) => panic!("Expected a failure"),
-            Err(e) => e
+            Err(e) => e,
         };
 
         match *err {
-            bincode::ErrorKind::SizeLimit => {},
-            _ => panic!("Expected ErrorKind::SizeLimit, got {err:#?}")
+            bincode::ErrorKind::SizeLimit => {}
+            _ => panic!("Expected ErrorKind::SizeLimit, got {err:#?}"),
         };
     }
 }
