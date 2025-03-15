@@ -349,7 +349,7 @@ unsafe fn grow_unchecked(
     let ptr = realloc(old_ptr, old_layout, new_size_bytes);
 
     if ptr.is_null() {
-        let new_layout = Layout::from_size_align_unchecked(old_size_bytes, align);
+        let new_layout = Layout::from_size_align_unchecked(new_size_bytes, align);
         handle_alloc_error(new_layout);
     }
 
