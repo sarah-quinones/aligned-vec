@@ -22,7 +22,6 @@ use core::{
     ops::{Deref, DerefMut},
     ptr::{null_mut, NonNull},
 };
-use equator::assert;
 use raw::ARawVec;
 
 mod raw;
@@ -1060,7 +1059,6 @@ mod tests {
     use super::*;
     use alloc::vec;
     use core::iter::repeat;
-    use equator::assert;
 
     #[test]
     fn new() {
