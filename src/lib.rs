@@ -1,4 +1,3 @@
-#![no_std]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 //! # aligned-vec
@@ -14,6 +13,8 @@
 //! - `std` (default feature): Links this crate to the `std-crate` instead of the `core-crate`.
 //! - `serde`: Implements serialization and deserialization features for `ABox` and `AVec`.
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
 use core::{
     alloc::Layout,
     fmt::Debug,
@@ -27,6 +28,9 @@ use raw::ARawVec;
 
 mod raw;
 extern crate alloc;
+
+#[cfg(feature = "std")]
+mod io;
 
 // https://rust-lang.github.io/hashbrown/src/crossbeam_utils/cache_padded.rs.html#128-130
 pub const CACHELINE_ALIGN: usize = {
@@ -533,8 +537,8 @@ impl<T, A: Alignment> AVec<T, A> {
         }
     }
 
-    /// Shrinks the capacity of the vector with a lower bound.  
-    /// The capacity will remain at least as large as both the length and the supplied value.  
+    /// Shrinks the capacity of the vector with a lower bound.
+    /// The capacity will remain at least as large as both the length and the supplied value.
     /// If the current capacity is less than the lower limit, this is a no-op.
     #[inline]
     pub fn shrink_to(&mut self, min_capacity: usize) {
@@ -544,7 +548,7 @@ impl<T, A: Alignment> AVec<T, A> {
         }
     }
 
-    /// Shrinks the capacity of the vector as much as possible without dropping any elements.  
+    /// Shrinks the capacity of the vector as much as possible without dropping any elements.
     #[inline]
     pub fn shrink_to_fit(&mut self) {
         if self.capacity() > self.len {
@@ -552,7 +556,7 @@ impl<T, A: Alignment> AVec<T, A> {
         }
     }
 
-    /// Drops the last elements of the vector until its length is equal to `len`.  
+    /// Drops the last elements of the vector until its length is equal to `len`.
     /// If `len` is greater than or equal to `self.len()`, this is a no-op.
     #[inline]
     pub fn truncate(&mut self, len: usize) {
@@ -577,7 +581,7 @@ impl<T, A: Alignment> AVec<T, A> {
         }
     }
 
-    /// Converts the vector into [`ABox<T>`].  
+    /// Converts the vector into [`ABox<T>`].
     /// This will drop any excess capacity.
     #[inline]
     pub fn into_boxed_slice(self) -> ABox<[T], A> {
