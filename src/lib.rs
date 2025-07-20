@@ -192,14 +192,14 @@ impl<T: ?Sized, A: Alignment> DerefMut for ABox<T, A> {
 impl<T: ?Sized, A: Alignment> AsRef<T> for ABox<T, A> {
     #[inline]
     fn as_ref(&self) -> &T {
-        &**self
+        self
     }
 }
 
 impl<T: ?Sized, A: Alignment> AsMut<T> for ABox<T, A> {
     #[inline]
     fn as_mut(&mut self) -> &mut T {
-        &mut **self
+        self
     }
 }
 
@@ -255,14 +255,14 @@ impl<T, A: Alignment> DerefMut for AVec<T, A> {
 impl<T, A: Alignment> AsRef<[T]> for AVec<T, A> {
     #[inline]
     fn as_ref(&self) -> &[T] {
-        &**self
+        self
     }
 }
 
 impl<T, A: Alignment> AsMut<[T]> for AVec<T, A> {
     #[inline]
     fn as_mut(&mut self) -> &mut [T] {
-        &mut **self
+        self
     }
 }
 
@@ -720,7 +720,7 @@ impl<T, A: Alignment> AVec<T, A> {
     }
 
     #[inline]
-    pub unsafe fn set_len(&mut self, new_len: usize) {
+    pub fn set_len(&mut self, new_len: usize) {
         self.len = new_len;
     }
 
@@ -741,13 +741,13 @@ impl<T, A: Alignment> AVec<T, A> {
     where
         T: Clone,
     {
-        Self::from_iter(align, core::iter::repeat(elem).take(count))
+        Self::from_iter(align, core::iter::repeat_n(elem, count))
     }
 
     #[inline(always)]
     #[doc(hidden)]
     /// this is unsafe do not call this in user code
-    pub fn __copy_from_ptr(align: usize, src: *const T, len: usize) -> Self {
+    pub unsafe fn __copy_from_ptr(align: usize, src: *const T, len: usize) -> Self {
         let mut v = Self::with_capacity(align, len);
         let dst = v.as_mut_ptr();
         unsafe { core::ptr::copy_nonoverlapping(src, dst, len) };
@@ -818,7 +818,7 @@ impl<T: Debug, A: Alignment> Debug for AVec<T, A> {
 
 impl<T: Debug + ?Sized, A: Alignment> Debug for ABox<T, A> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        (&**self).fmt(f)
+        (**self).fmt(f)
     }
 }
 
@@ -859,18 +859,18 @@ impl<T: Ord, A: Alignment> Ord for AVec<T, A> {
 
 impl<T: PartialEq + ?Sized, A: Alignment> PartialEq for ABox<T, A> {
     fn eq(&self, other: &Self) -> bool {
-        (&**self).eq(&**other)
+        (**self).eq(&**other)
     }
 }
 impl<T: Eq + ?Sized, A: Alignment> Eq for ABox<T, A> {}
 impl<T: PartialOrd + ?Sized, A: Alignment> PartialOrd for ABox<T, A> {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        (&**self).partial_cmp(&**other)
+        (**self).partial_cmp(&**other)
     }
 }
 impl<T: Ord + ?Sized, A: Alignment> Ord for ABox<T, A> {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        (&**self).cmp(&**other)
+        (**self).cmp(&**other)
     }
 }
 unsafe impl<T: Sync, A: Alignment + Sync> Sync for AVec<T, A> {}
@@ -1017,7 +1017,7 @@ macro_rules! avec {
             let __data = &::core::mem::ManuallyDrop::new([$($elem,)*]);
             let __len = __data.len();
             let __ptr = __data.as_ptr();
-            let mut __aligned_vec = $crate::AVec::<_, $crate::ConstAlign::<$align>>::__copy_from_ptr(0, __ptr, __len);
+            let mut __aligned_vec = unsafe { $crate::AVec::<_, $crate::ConstAlign::<$align>>::__copy_from_ptr(0, __ptr, __len) };
             __aligned_vec
         }
     };
@@ -1029,7 +1029,7 @@ macro_rules! avec {
             let __data = &::core::mem::ManuallyDrop::new([$($elem,)*]);
             let __len = __data.len();
             let __ptr = __data.as_ptr();
-            let mut __aligned_vec = $crate::AVec::<_>::__copy_from_ptr(0, __ptr, __len);
+            let mut __aligned_vec = unsafe { $crate::AVec::<_>::__copy_from_ptr(0, __ptr, __len) };
             __aligned_vec
         }
     };
@@ -1049,7 +1049,7 @@ macro_rules! avec_rt {
             let __data = &::core::mem::ManuallyDrop::new([$($elem,)*]);
             let __len = __data.len();
             let __ptr = __data.as_ptr();
-            let mut __aligned_vec = $crate::AVec::<_>::__copy_from_ptr($align, __ptr, __len);
+            let mut __aligned_vec = unsafe { $crate::AVec::<_>::__copy_from_ptr($align, __ptr, __len) };
             __aligned_vec
         }
     };
