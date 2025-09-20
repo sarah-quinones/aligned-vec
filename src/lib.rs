@@ -1,4 +1,3 @@
-#![no_std]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 //! # aligned-vec
@@ -15,6 +14,8 @@
 //! - `std` (default feature): Links this crate to the `std-crate` instead of the `core-crate`.
 //! - `serde`: Implements serialization and deserialization features for `ABox` and `AVec`.
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
 use core::alloc::Layout;
 use core::fmt::Debug;
 use core::marker::PhantomData;
@@ -26,6 +27,9 @@ use raw::ARawVec;
 
 mod raw;
 extern crate alloc;
+
+#[cfg(feature = "std")]
+mod io;
 
 // https://rust-lang.github.io/hashbrown/src/crossbeam_utils/cache_padded.rs.html#128-130
 pub const CACHELINE_ALIGN: usize = {
