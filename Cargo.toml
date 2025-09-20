@@ -15,6 +15,7 @@ serde = { version = "1.0", optional = true, default-features = false }
 
 [dev-dependencies]
 bincode = { version = "1" }
+diol = "0.13.1"
 
 [features]
 default = ["std"]

@@ -1,5 +1,5 @@
 use crate::{Alignment, TryReserveError};
-use alloc::alloc::{Layout, alloc, dealloc, handle_alloc_error, realloc};
+use alloc::alloc::{Layout, alloc, alloc_zeroed, dealloc, handle_alloc_error, realloc};
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of};
 use core::ptr::{NonNull, null_mut};
@@ -62,6 +62,24 @@ impl<T, A: Alignment> ARawVec<T, A> {
 		} else {
 			Self {
 				ptr: NonNull::<T>::new_unchecked(with_capacity_unchecked(capacity, align, size_of::<T>()) as *mut T),
+				capacity,
+				align: A::new(align, align_of::<T>()),
+				_marker: PhantomData,
+			}
+		}
+	}
+
+	/// # Safety
+	///
+	/// `align` must be a power of two.  
+	/// `align` must be greater than or equal to `core::mem::align_of::<T>()`.
+	#[inline]
+	pub unsafe fn with_capacity_unchecked_zeroed(capacity: usize, align: usize) -> Self {
+		if capacity == 0 || size_of::<T>() == 0 {
+			Self::new_unchecked(align)
+		} else {
+			Self {
+				ptr: NonNull::<T>::new_unchecked(with_capacity_unchecked_zeroed(capacity, align, size_of::<T>()) as *mut T),
 				capacity,
 				align: A::new(align, align_of::<T>()),
 				_marker: PhantomData,
@@ -285,6 +303,25 @@ pub unsafe fn with_capacity_unchecked(capacity: usize, align: usize, size_of: us
 
 	let layout = Layout::from_size_align_unchecked(size_bytes, align);
 	let ptr = alloc(layout);
+	if ptr.is_null() {
+		handle_alloc_error(layout);
+	}
+	ptr
+}
+
+pub unsafe fn with_capacity_unchecked_zeroed(capacity: usize, align: usize, size_of: usize) -> *mut u8 {
+	let size_bytes = match capacity.checked_mul(size_of) {
+		Some(size_bytes) => size_bytes,
+		None => capacity_overflow(),
+	};
+	debug_assert!(size_bytes > 0);
+	let will_overflow = size_bytes > usize::MAX - (align - 1);
+	if will_overflow || !is_valid_alloc(size_bytes) {
+		capacity_overflow();
+	}
+
+	let layout = Layout::from_size_align_unchecked(size_bytes, align);
+	let ptr = alloc_zeroed(layout);
 	if ptr.is_null() {
 		handle_alloc_error(layout);
 	}

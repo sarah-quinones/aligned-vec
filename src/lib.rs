@@ -64,6 +64,29 @@ mod private {
 	pub trait Seal {}
 }
 
+/// Obtain a TypeId for T without `T: 'static`
+/// credit goes to: <https://github.com/thomcc>
+#[inline(always)]
+fn nonstatic_typeid<T: ?Sized>() -> core::any::TypeId {
+	trait NonStaticAny {
+		fn type_id(&self) -> core::any::TypeId
+		where
+			Self: 'static;
+	}
+	impl<T: ?Sized> NonStaticAny for core::marker::PhantomData<T> {
+		#[inline(always)]
+		fn type_id(&self) -> core::any::TypeId
+		where
+			Self: 'static,
+		{
+			core::any::TypeId::of::<T>()
+		}
+	}
+	let it = core::marker::PhantomData::<T>;
+	// There is no excuse for the crimes we have done here, but what jury would convict us?
+	unsafe { core::mem::transmute::<&dyn NonStaticAny, &'static dyn NonStaticAny>(&it).type_id() }
+}
+
 /// Trait for types that wrap an alignment value.
 pub trait Alignment: Copy + private::Seal {
 	/// Takes an alignment value and a minimum valid alignment,
@@ -719,7 +742,24 @@ impl<T, A: Alignment> AVec<T, A> {
 	where
 		T: Clone,
 	{
-		Self::from_iter(align, core::iter::repeat(elem).take(count))
+		macro_rules! is {
+			($($ty: ty),* $(,)?) => {
+				$(nonstatic_typeid::<T>() == nonstatic_typeid::<$ty>())||*
+			};
+		}
+		if is!(u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, f32, f64)
+			&& unsafe {
+				core::slice::from_raw_parts(&elem as *const T as *const u8, size_of::<T>())
+					== core::slice::from_raw_parts((&0u128) as *const u128 as *const u8, size_of::<T>())
+			} {
+			let align = A::new(align, align_of::<T>()).alignment(align_of::<T>());
+			Self {
+				buf: unsafe { ARawVec::with_capacity_unchecked_zeroed(count, align) },
+				len: count,
+			}
+		} else {
+			Self::from_iter(align, core::iter::repeat(elem).take(count))
+		}
 	}
 
 	#[inline(always)]
