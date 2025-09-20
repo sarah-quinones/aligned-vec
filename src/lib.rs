@@ -1270,19 +1270,19 @@ mod tests {
 
 	#[test]
 	fn box_new() {
-		let boxed = ABox::<_>::new(64, 3);
+		let boxed = ABox::<_, RuntimeAlign>::new(64, 3);
 		assert_eq!(&*boxed, &3);
 	}
 
 	#[test]
 	fn box_clone() {
-		let boxed = ABox::<_>::new(64, 3);
+		let boxed = ABox::<_, RuntimeAlign>::new(64, 3);
 		assert_eq!(boxed, boxed.clone());
 	}
 
 	#[test]
 	fn box_slice_clone() {
-		let boxed = AVec::<_>::from_iter(64, 0..123).into_boxed_slice();
+		let boxed = AVec::<_, RuntimeAlign>::from_iter(64, 0..123).into_boxed_slice();
 		assert_eq!(boxed, boxed.clone());
 	}
 
