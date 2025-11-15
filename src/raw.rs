@@ -398,7 +398,7 @@ unsafe fn try_grow_unchecked(
 
 #[inline]
 unsafe fn is_valid_alloc(alloc_size: usize, align: usize) -> bool {
-	::std::hint::assert_unchecked(align.is_power_of_two());
+	debug_assert!(align.is_power_of_two());
 	// "size, when rounded up to the nearest multiple of align, must not overflow isize"
 	let max = (isize::MAX as usize) - (align - 1);
 	alloc_size <= max
