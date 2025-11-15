@@ -296,8 +296,7 @@ pub unsafe fn with_capacity_unchecked(capacity: usize, align: usize, size_of: us
 		None => capacity_overflow(),
 	};
 	debug_assert!(size_bytes > 0);
-	let will_overflow = size_bytes > usize::MAX - (align - 1);
-	if will_overflow || !is_valid_alloc(size_bytes) {
+	if !is_valid_alloc(size_bytes, align) {
 		capacity_overflow();
 	}
 
@@ -315,8 +314,7 @@ pub unsafe fn with_capacity_unchecked_zeroed(capacity: usize, align: usize, size
 		None => capacity_overflow(),
 	};
 	debug_assert!(size_bytes > 0);
-	let will_overflow = size_bytes > usize::MAX - (align - 1);
-	if will_overflow || !is_valid_alloc(size_bytes) {
+	if !is_valid_alloc(size_bytes, align) {
 		capacity_overflow();
 	}
 
@@ -333,8 +331,7 @@ unsafe fn grow_unchecked(old_ptr: *mut u8, old_capacity: usize, new_capacity: us
 		Some(size_bytes) => size_bytes,
 		None => capacity_overflow(),
 	};
-	let will_overflow = new_size_bytes > usize::MAX - (align - 1);
-	if will_overflow || !is_valid_alloc(new_size_bytes) {
+	if !is_valid_alloc(new_size_bytes, align) {
 		capacity_overflow();
 	}
 
@@ -358,8 +355,7 @@ pub unsafe fn try_with_capacity_unchecked(capacity: usize, align: usize, size_of
 		None => return Err(TryReserveError::CapacityOverflow),
 	};
 	debug_assert!(size_bytes > 0);
-	let will_overflow = size_bytes > usize::MAX - (align - 1);
-	if will_overflow || !is_valid_alloc(size_bytes) {
+	if !is_valid_alloc(size_bytes, align) {
 		return Err(TryReserveError::CapacityOverflow);
 	}
 
@@ -382,8 +378,7 @@ unsafe fn try_grow_unchecked(
 		Some(size_bytes) => size_bytes,
 		None => return Err(TryReserveError::CapacityOverflow),
 	};
-	let will_overflow = new_size_bytes > usize::MAX - (align - 1);
-	if will_overflow || !is_valid_alloc(new_size_bytes) {
+	if !is_valid_alloc(new_size_bytes, align) {
 		return Err(TryReserveError::CapacityOverflow);
 	}
 
@@ -402,6 +397,9 @@ unsafe fn try_grow_unchecked(
 }
 
 #[inline]
-fn is_valid_alloc(alloc_size: usize) -> bool {
-	!(usize::BITS < 64 && alloc_size > isize::MAX as usize)
+unsafe fn is_valid_alloc(alloc_size: usize, align: usize) -> bool {
+	::std::hint::assert_unchecked(align.is_power_of_two());
+	// "size, when rounded up to the nearest multiple of align, must not overflow isize"
+	let max = (isize::MAX as usize) - (align - 1);
+	alloc_size <= max
 }
