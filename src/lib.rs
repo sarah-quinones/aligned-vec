@@ -22,6 +22,7 @@ use core::marker::PhantomData;
 use core::mem::{ManuallyDrop, align_of, size_of};
 use core::ops::{Deref, DerefMut};
 use core::ptr::{NonNull, null_mut};
+#[cfg(feature = "equator")]
 use equator::assert;
 use raw::ARawVec;
 
@@ -535,8 +536,8 @@ impl<T, A: Alignment> AVec<T, A> {
 		}
 	}
 
-	/// Shrinks the capacity of the vector with a lower bound.  
-	/// The capacity will remain at least as large as both the length and the supplied value.  
+	/// Shrinks the capacity of the vector with a lower bound.
+	/// The capacity will remain at least as large as both the length and the supplied value.
 	/// If the current capacity is less than the lower limit, this is a no-op.
 	#[inline]
 	pub fn shrink_to(&mut self, min_capacity: usize) {
@@ -546,7 +547,7 @@ impl<T, A: Alignment> AVec<T, A> {
 		}
 	}
 
-	/// Shrinks the capacity of the vector as much as possible without dropping any elements.  
+	/// Shrinks the capacity of the vector as much as possible without dropping any elements.
 	#[inline]
 	pub fn shrink_to_fit(&mut self) {
 		if self.capacity() > self.len {
@@ -554,7 +555,7 @@ impl<T, A: Alignment> AVec<T, A> {
 		}
 	}
 
-	/// Drops the last elements of the vector until its length is equal to `len`.  
+	/// Drops the last elements of the vector until its length is equal to `len`.
 	/// If `len` is greater than or equal to `self.len()`, this is a no-op.
 	#[inline]
 	pub fn truncate(&mut self, len: usize) {
@@ -579,7 +580,7 @@ impl<T, A: Alignment> AVec<T, A> {
 		}
 	}
 
-	/// Converts the vector into [`ABox<T>`].  
+	/// Converts the vector into [`ABox<T>`].
 	/// This will drop any excess capacity.
 	#[inline]
 	pub fn into_boxed_slice(self) -> ABox<[T], A> {
@@ -897,7 +898,7 @@ unsafe impl<T: ?Sized + Send, A: Alignment + Send> Send for ABox<T, A> {}
 #[cfg(feature = "serde")]
 mod serde {
 	use super::*;
-	use ::serde::{Deserialize, Serialize};
+	use serde::{Deserialize, Serialize};
 
 	#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
 	impl<T: ?Sized + Serialize, A: Alignment> Serialize for ABox<T, A> {
@@ -1399,8 +1400,8 @@ mod serde_tests {
 	use super::*;
 	use alloc::vec;
 
-	use ::serde::Deserialize;
 	use bincode::{DefaultOptions, Deserializer, Options};
+	use serde::Deserialize;
 
 	#[test]
 	fn can_limit_deserialization_size() {
