@@ -1062,6 +1062,58 @@ macro_rules! avec_rt {
     };
 }
 
+#[cfg(all(test, miri, feature = "std"))]
+mod miri_alloc {
+	use core::alloc::Layout;
+	use core::ptr::null_mut;
+	use std::alloc::{GlobalAlloc, System};
+	use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+
+	pub(super) struct Allocator;
+
+	static FAIL_REALLOC_PTR: AtomicPtr<u8> = AtomicPtr::new(null_mut());
+	static FAIL_REALLOC_OLD_SIZE: AtomicUsize = AtomicUsize::new(0);
+	static FAIL_REALLOC_NEW_SIZE: AtomicUsize = AtomicUsize::new(0);
+
+	pub(super) fn fail_realloc_once(ptr: *mut u8, old_size: usize, new_size: usize) {
+		FAIL_REALLOC_OLD_SIZE.store(old_size, Ordering::SeqCst);
+		FAIL_REALLOC_NEW_SIZE.store(new_size, Ordering::SeqCst);
+		FAIL_REALLOC_PTR.store(ptr, Ordering::SeqCst);
+	}
+
+	unsafe impl GlobalAlloc for Allocator {
+		unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+			unsafe { System.alloc(layout) }
+		}
+
+		unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+			unsafe { System.dealloc(ptr, layout) }
+		}
+
+		unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+			unsafe { System.alloc_zeroed(layout) }
+		}
+
+		unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+			let target = FAIL_REALLOC_PTR.load(Ordering::SeqCst);
+			if !target.is_null()
+				&& ptr == target
+				&& layout.size() == FAIL_REALLOC_OLD_SIZE.load(Ordering::SeqCst)
+				&& new_size == FAIL_REALLOC_NEW_SIZE.load(Ordering::SeqCst)
+			{
+				FAIL_REALLOC_PTR.store(null_mut(), Ordering::SeqCst);
+				return null_mut();
+			}
+
+			unsafe { System.realloc(ptr, layout, new_size) }
+		}
+	}
+}
+
+#[cfg(all(test, miri, feature = "std"))]
+#[global_allocator]
+static MIRI_ALLOCATOR: miri_alloc::Allocator = miri_alloc::Allocator;
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -1391,6 +1443,69 @@ mod tests {
 		assert_eq!(w[1], vec![3, 4]);
 		assert_eq!(w[2], vec![5, 6]);
 		assert_eq!(w[3], vec![7]);
+	}
+
+	#[cfg(miri)]
+	#[test]
+	fn miri_extend_from_slice_bitwise_copies_non_copy_values() {
+		use alloc::string::String;
+
+		let source = [String::from("owned allocation")];
+		let mut v = AVec::<String>::new(16);
+
+		// ISSUE: `extend_from_slice` is a safe API requiring only `T: Clone`,
+		// but it uses `ptr::copy_nonoverlapping` instead of calling `clone`.
+		// For an owning type like `String`, this creates two owners of the same
+		// allocation; dropping both owners is a double-free that Miri reports as UB.
+		v.extend_from_slice(&source);
+		drop(source);
+		drop(v);
+	}
+
+	#[cfg(miri)]
+	#[test]
+	fn miri_copy_from_ptr_is_safe_with_invalid_raw_pointer() {
+		// ISSUE: `__copy_from_ptr` is public and safe despite dereferencing the
+		// caller-provided raw pointer with `ptr::copy_nonoverlapping`. Safe code
+		// can pass a null or dangling pointer and trigger an invalid read.
+		let _ = AVec::<u8>::__copy_from_ptr(16, core::ptr::null(), 1);
+	}
+
+	#[cfg(miri)]
+	#[test]
+	fn miri_insert_does_pointer_arithmetic_before_bounds_check() {
+		let mut v = AVec::<u8>::new(16);
+
+		// ISSUE: `insert` computes `self.as_mut_ptr().add(index)` before checking
+		// whether `index <= len`. An out-of-bounds safe call should panic, but
+		// the unchecked pointer arithmetic itself is UB for a large index.
+		v.insert(usize::MAX, 1);
+	}
+
+	#[cfg(all(miri, feature = "std"))]
+	#[test]
+	fn miri_shrink_empty_vec_reallocates_to_zero() {
+		let mut v = AVec::<u8>::with_capacity(16, 8);
+		super::miri_alloc::fail_realloc_once(v.as_mut_ptr(), 8, 0);
+
+		// ISSUE: shrinking an allocated vector to length zero calls
+		// `alloc::alloc::realloc` with `new_size == 0`. `GlobalAlloc::realloc`
+		// requires a non-zero new size; if the allocator returns null for this
+		// invalid shrink, the code also passes that null to `NonNull::new_unchecked`.
+		v.shrink_to_fit();
+	}
+
+	#[cfg(all(miri, feature = "std"))]
+	#[test]
+	fn miri_shrink_realloc_failure_constructs_nonnull_from_null() {
+		let mut v = AVec::<u8>::with_capacity(16, 100);
+		v.resize(13, 1);
+		super::miri_alloc::fail_realloc_once(v.as_mut_ptr(), 100, 13);
+
+		// ISSUE: `ARawVec::shrink_to` does not handle a null return from
+		// `realloc` for a non-zero shrink. A failing allocator is allowed to
+		// return null; the code then passes that null to `NonNull::new_unchecked`.
+		v.shrink_to_fit();
 	}
 }
 
