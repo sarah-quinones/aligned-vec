@@ -243,19 +243,36 @@ impl<T, A: Alignment> ARawVec<T, A> {
 		debug_assert!(len < self.capacity());
 		let size_of = size_of::<T>();
 		let old_capacity = self.capacity;
-		let align = self.align;
+		let align = self.align.alignment(align_of::<T>());
 		let old_ptr = self.ptr.as_ptr() as *mut u8;
 
 		// this cannot overflow or exceed isize::MAX bytes since len < cap and the same was true
 		// for cap
-		let new_size_bytes = len * size_of;
 		let old_size_bytes = old_capacity * size_of;
-		let old_layout = Layout::from_size_align_unchecked(old_size_bytes, align.alignment(align_of::<T>()));
+		// SAFETY: `old_capacity` and `align` describe the allocation currently owned by `self`;
+		// allocations with invalid sizes are rejected before an `ARawVec` stores them.
+		let old_layout = Layout::from_size_align_unchecked(old_size_bytes, align);
 
+		if len == 0 {
+			// SAFETY: `old_layout` matches the allocation currently owned by `self`. After
+			// deallocation, the empty vector uses the same non-null aligned dangling pointer as
+			// `new_unchecked`; `align` is non-zero because `T` is not zero-sized here.
+			dealloc(old_ptr, old_layout);
+			self.capacity = 0;
+			self.ptr = NonNull::<T>::new_unchecked(null_mut::<u8>().wrapping_add(align) as *mut T);
+			return;
+		}
+
+		let new_size_bytes = len * size_of;
+		// SAFETY: `new_size_bytes` is non-zero here, and `old_layout` matches `old_ptr`. If the
+		// allocator returns null, the old allocation remains valid, so `self` is left unchanged.
 		let ptr = realloc(old_ptr, old_layout, new_size_bytes);
-		let ptr = ptr as *mut T;
-		self.capacity = len;
-		self.ptr = NonNull::<T>::new_unchecked(ptr);
+		if !ptr.is_null() {
+			self.capacity = len;
+			// SAFETY: the null case was handled above, and `realloc` returns memory with the
+			// requested layout's alignment on success.
+			self.ptr = NonNull::<T>::new_unchecked(ptr as *mut T);
+		}
 	}
 
 	#[inline]
