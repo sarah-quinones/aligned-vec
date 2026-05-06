@@ -585,6 +585,29 @@ impl<T, A: Alignment> AVec<T, A> {
 	pub fn into_boxed_slice(self) -> ABox<[T], A> {
 		let mut this = self;
 		this.shrink_to_fit();
+
+		// `shrink_to_fit` can fail to shrink and leave capacity greater than length. `ABox<[T]>`
+		// only stores a slice pointer, so its `Drop` computes the allocation layout from the slice
+		// length. Move into a fresh exact-size allocation before boxing, otherwise the boxed slice
+		// could deallocate with a layout smaller than the allocation that actually exists.
+		if size_of::<T>() != 0 && this.capacity() != this.len() {
+			let len = this.len();
+			let align = this.alignment();
+			let mut compact = Self::with_capacity(align, len);
+			unsafe {
+				// SAFETY: `compact` is a distinct allocation with capacity for `len` elements, and
+				// `this` holds `len` initialized elements. This bitwise move is valid for all `T`
+				// because `this.len` is set to zero before `this` can drop the moved-from values.
+				core::ptr::copy_nonoverlapping(this.as_ptr(), compact.as_mut_ptr(), len);
+				compact.len = len;
+				this.len = 0;
+			}
+			let (ptr, align, len, _) = compact.into_raw_parts();
+			// SAFETY: `compact` was allocated with capacity equal to `len`, so the boxed slice will
+			// later deallocate with the same layout that created this allocation.
+			return unsafe { ABox::<[T], A>::from_raw_parts(align, core::ptr::slice_from_raw_parts_mut(ptr, len)) };
+		}
+
 		let (ptr, align, len, _) = this.into_raw_parts();
 		unsafe { ABox::<[T], A>::from_raw_parts(align, core::ptr::slice_from_raw_parts_mut(ptr, len)) }
 	}
@@ -606,6 +629,9 @@ impl<T, A: Alignment> AVec<T, A> {
 		}
 
 		let len = self.len();
+		if index > len {
+			assert_failed(index, len);
+		}
 
 		// Add space for the new element
 		self.reserve(1);
@@ -618,8 +644,6 @@ impl<T, A: Alignment> AVec<T, A> {
 				core::ptr::copy(p, p.add(1), len - index);
 			} else if index == len {
 				// No elements need shifting.
-			} else {
-				assert_failed(index, len);
 			}
 			core::ptr::write(p, element);
 
@@ -820,9 +844,9 @@ impl<T: Clone, A: Alignment> AVec<T, A> {
 		// Copied somewhat from the standard library
 		let count = other.len();
 		self.reserve(count);
-		let len = self.len();
-		unsafe { core::ptr::copy_nonoverlapping(other.as_ptr(), self.as_mut_ptr().add(len), count) };
-		self.len += count;
+		for item in other {
+			self.push(item.clone());
+		}
 	}
 }
 
@@ -1464,6 +1488,7 @@ mod tests {
 
 	#[cfg(miri)]
 	#[test]
+	#[should_panic(expected = "insertion index")]
 	fn miri_insert_does_pointer_arithmetic_before_bounds_check() {
 		let mut v = AVec::<u8>::new(16);
 
@@ -1497,6 +1522,17 @@ mod tests {
 		// `realloc` for a non-zero shrink. A failing allocator is allowed to
 		// return null; the code then passes that null to `NonNull::new_unchecked`.
 		v.shrink_to_fit();
+	}
+
+	#[cfg(all(miri, feature = "std"))]
+	#[test]
+	fn miri_into_boxed_slice_handles_shrink_realloc_failure() {
+		let mut v = AVec::<u8>::with_capacity(16, 100);
+		v.resize(13, 1);
+		super::miri_alloc::fail_realloc_once(v.as_mut_ptr(), 100, 13);
+
+		let boxed = v.into_boxed_slice();
+		assert_eq!(&*boxed, &[1; 13]);
 	}
 }
 
