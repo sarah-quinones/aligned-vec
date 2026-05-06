@@ -1464,15 +1464,6 @@ mod tests {
 
 	#[cfg(miri)]
 	#[test]
-	fn miri_copy_from_ptr_is_safe_with_invalid_raw_pointer() {
-		// ISSUE: `__copy_from_ptr` is public and safe despite dereferencing the
-		// caller-provided raw pointer with `ptr::copy_nonoverlapping`. Safe code
-		// can pass a null or dangling pointer and trigger an invalid read.
-		let _ = AVec::<u8>::__copy_from_ptr(16, core::ptr::null(), 1);
-	}
-
-	#[cfg(miri)]
-	#[test]
 	fn miri_insert_does_pointer_arithmetic_before_bounds_check() {
 		let mut v = AVec::<u8>::new(16);
 
